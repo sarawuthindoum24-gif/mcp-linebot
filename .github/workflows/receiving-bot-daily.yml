@@ -13,7 +13,7 @@ jobs:
     steps:
       - name: Trigger daily summary
         env:
-          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_PROJECT_REF: gevivzvlfloaczpunymx
           DAILY_REPORT_SECRET: ${{ secrets.DAILY_REPORT_SECRET }}
         run: |
           curl --fail-with-body --silent --show-error --retry 2 \
