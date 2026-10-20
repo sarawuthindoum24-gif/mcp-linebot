@@ -1,0 +1,7 @@
+project_id = "replace-with-your-project-ref"
+
+[functions.line-webhook]
+verify_jwt = false
+
+[functions.daily-teams-report]
+verify_jwt = false
