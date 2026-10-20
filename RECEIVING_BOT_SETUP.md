@@ -1,6 +1,6 @@
 # BNN Receiving Issue Bot — Supabase-first (Draft)
 
-**Status (live audit, 20 Oct 2026):** DATABASE CREATED + EDGE FUNCTIONS DEPLOYED / LINE WEBHOOK CURRENTLY POINTS TO THIS FUNCTION BUT VERIFY RETURNS HTTP 500 / TEAMS NOT CONNECTED / SCHEDULE DISABLED. The pre-existing `LINE-01-Webhook-Collector` must remain in service. No routing change is authorized until its current owner and a safe fan-out or restoration path are confirmed.
+**Status (live audit, 20 Oct 2026):** DATABASE CREATED + EDGE FUNCTIONS DEPLOYED / LINE WEBHOOK RESTORED TO THE PRE-EXISTING `LINE-01-Webhook-Collector` / TEAMS NOT CONNECTED / SCHEDULE DISABLED. LINE Developers Verify succeeded after restoration, and LINE-01 showed a new successful run at 21:27 Asia/Bangkok. The new Supabase webhook is not receiving production LINE events.
 
 ## Business logic
 
@@ -40,7 +40,7 @@
    - `RECEIVING_BOT_DEPLOY_APPROVED=true` only after SQL/schema/signature/test sign-off.
    - `RECEIVING_BOT_DAILY_ENABLED=true` only after controlled pilot approval and verified Teams one-to-one chat destination.
 5. After approval, run the **manual** workflow `Deploy Receiving Bot Edge Functions (manual)`. It deploys functions only; the migration must already have been applied.
-6. **Protect LINE-01 first.** The live LINE Developers page for `@842nltit` currently has Use webhook ON and points to `https://gevivzvlfloaczpunymx.supabase.co/functions/v1/line-webhook`; Verify returned HTTP 500 on 20 Oct 2026. The previous LINE-01 Power Automate endpoint is not present in the local backup package. Identify its live trigger URL in the authorized Power Automate account and restore routing or implement a tested fan-out before collecting with this new function. Do not silently replace LINE-01. The channel secret belongs only in Supabase Edge Function Secrets; never copy it into this repository.
+6. **Protect LINE-01 first.** The live LINE Developers page for `@842nltit` had Use webhook ON and pointed to the new Supabase `line-webhook`; Verify returned HTTP 500. On 20 Oct 2026 the webhook URL was restored to the enabled LINE-01 Power Automate trigger without exposing its signed URL; LINE Developers Verify succeeded and LINE-01 recorded a successful run at 21:27 Asia/Bangkok. Do not point LINE directly at the new function again until a tested fan-out plan preserves LINE-01. The LINE channel secret belongs only in Supabase Edge Function Secrets; never copy it into this repository.
 7. Invite the OA to the actual LINE group, grant the bot group participation permission in LINE Developers, and run a **synthetic** signed webhook test. Do not test using real branch stock adjustments.
 8. In Microsoft Teams > Workflows, create **Send webhook alerts to a chat** (or a Flow with `When a Teams webhook request is received` followed by `Post a message in a chat or channel` → `Post as: Flow bot` → `Post in: Chat with Flow bot` → recipient selected in the Teams UI). Select the exact intended individual chat using the user-provided recipient account. Save the Flow and put its callback URL into Supabase Edge Function Secret `TEAMS_WEBHOOK_URL`. Do not commit the recipient email or Flow URL to this public repository. Send a synthetic card to verify the actual recipient.
 9. **Only after recipient confirmation, rotated LINE token, signed webhook validation and supervised pilot:** merge this PR into default branch and enable daily workflow. Before that keep `RECEIVING_BOT_DAILY_ENABLED` unset/false.  GitHub scheduled workflows run on the repository default branch, at 01:00 UTC (08:00 Bangkok), and can execute later than their nominal time.
@@ -49,7 +49,7 @@
 
 1. Supabase Dashboard → Edge Functions → Secrets → create `LINE_CHANNEL_SECRET` from LINE Developers Basic settings. This is NOT the access token previously exposed in chat.
 2. In Microsoft Teams Workflows, create a **personal-chat** incoming webhook / personal-recipient Flow, specifically selecting the intended recipient account there. Store the callback as Supabase secret `TEAMS_WEBHOOK_URL` and a strong `DAILY_REPORT_SECRET` in both Supabase and GitHub Actions Secrets. **No Teams callback URL is configured yet.**
-3. Resolve the already changed LINE Webhook URL. The user confirmed that LINE-01 must continue. Find its authorized live trigger URL and establish a tested restoration or fan-out route; no further URL change is safe without that evidence.
+3. Keep the restored LINE-01 route working. To activate the new collector, design and test a fan-out path that preserves LINE-01 before making another LINE webhook URL change. The user confirmed that LINE-01 must continue.
 4. With the secret configured and a valid webhook route, use the LINE Developers Verify button, then send test text in a controlled LINE group. Confirm exactly 5 kg produces 0 rows, 6 kg produces 1 row, repeated message creates no duplicates, and unsend voids items.
 5. Send a synthetic report into the selected personal Teams chat, verify who received it, and review `receiving_report_dispatches` before enabling the 08:00 schedule.
 
@@ -64,7 +64,7 @@ deno test supabase/functions/_shared/parser_test.ts
 - The parser intentionally supports **only explicit order-and-actual quantity text lines with units**. Other wording is flagged for review. No OCR, image inspection, AI guesses, adjustment of SAP/POS stock, or automatic return/claim handling.
 - Direct LINE webhook deployment requires a dedicated webhook URL and the LINE **channel secret**. A previously posted long-lived channel **access token must be revoked and regenerated**; it is not needed for signature verification and is deliberately absent from this repository.
 - If LINE sends `unsend`, the source message is invalidated by setting `is_void` on stored rows. An unsend delivered ahead of the original source message is a follow-up enhancement before production.
-- Supabase database and two Edge Functions exist and are active, but the LINE channel secret and Teams Workflows URL are not configured. The LINE webhook currently points to the new function and fails Verify; do not assume LINE-01 is receiving events. No Teams personal-chat message has been sent.
+- Supabase database and two Edge Functions exist and are active, but the LINE channel secret and Teams Workflows URL are not configured. The LINE webhook has been restored to LINE-01; the new Supabase function is not in the live event path. No Teams personal-chat message has been sent.
 - Daily report dispatches are claimed before Teams delivery. When a request fails or has uncertain remote status, it is marked FAILED and **not automatically resent** to avoid duplicate Teams messages. Manual investigation and reconciliation is required.
 - A single Teams card summarizes all branches; for very large branch counts, a size guard may truncate card details and explicitly says so. Detailed items remain in Supabase.
 - The initial Google Sheet is a reporting template only; automatic Supabase → Google Sheets export must be added and tested separately.
@@ -76,7 +76,7 @@ deno test supabase/functions/_shared/parser_test.ts
 - Supabase project: `gevivzvlfloaczpunymx` (`ACTIVE_HEALTHY`)
 - Tables created: `public.receiving_issues`, `public.receiving_parse_review`, `public.receiving_report_dispatches` (RLS enabled; no public policies)
 - Functions: `line-webhook` v1 `ACTIVE`; `daily-teams-report` v1 `ACTIVE`
-- LINE destination: `@842nltit` currently points to the new Supabase function with Use webhook ON; LINE Developers Verify returned HTTP 500 on 20 Oct 2026. LINE-01 continuity is unverified.
+- LINE destination: `@842nltit` has Use webhook ON and points to the pre-existing LINE-01 Power Automate trigger. LINE Developers Verify succeeded, and LINE-01 recorded a new successful run at 21:27 Asia/Bangkok on 20 Oct 2026. The new Supabase webhook is not connected to LINE.
 - Teams destination: **NOT connected**; no personal chat posted
 - CI: parser tests and Edge Function type checks succeeded on latest implementation commit
 - Supabase Edge Function Secrets has **no custom secrets** and GitHub Actions has **no repository secrets or variables** as of the 20 Oct 2026 audit.
