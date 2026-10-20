@@ -12,7 +12,7 @@
 6. Store eligible product items only in Supabase PostgreSQL. Neither rejected raw lines nor complete LINE raw message payloads are stored by this new bot.
 7. Collect only minimal `line_message_id` metadata for unparsed-item review; no raw text.
 8. On LINE unsend, mark matched stored items void (do not delete audit history).
-9. At 08:00 Bangkok time, summarize **messages received on the previous Bangkok calendar day** and post a single grouped report to the Microsoft Teams channel `รายสาขา`.
+9. At 08:00 Bangkok time, summarize **messages received on the previous Bangkok calendar day** and post a single grouped report to the Microsoft Teams a **1:1 Teams chat** via an authorized Microsoft Teams Workflows chat-webhook template.
 10. Google Sheets is a **secondary reporting/mirror destination**, not the system of record. Its automatic synchronization is not yet implemented in this draft.
 
 ## Example acceptance
@@ -30,7 +30,7 @@
    - `LINE_CHANNEL_SECRET`: from LINE Developers > Basic settings (NOT the channel access token).
    - `SUPABASE_URL`: project API URL (normally available to Edge Functions).
    - `SUPABASE_SERVICE_ROLE_KEY`: server-side key (normally available to Edge Functions; never use in a browser).
-   - `TEAMS_WEBHOOK_URL`: Teams Workflows incoming-webhook URL for channel `รายสาขา`.
+   - `TEAMS_WEBHOOK_URL`: Teams Workflows incoming-webhook URL for a **1:1 Teams chat** via an authorized Microsoft Teams Workflows chat-webhook template.
    - `DAILY_REPORT_SECRET`: generate an independent strong random string; match GitHub secret below.
 3. Configure **GitHub repository secrets** (Actions):
    - `SUPABASE_ACCESS_TOKEN` (Supabase Management API/CLI PAT; not LINE channel token).
@@ -38,11 +38,11 @@
    - `DAILY_REPORT_SECRET`.
 4. Configure **GitHub repository variables** (Actions):
    - `RECEIVING_BOT_DEPLOY_APPROVED=true` only after SQL/schema/signature/test sign-off.
-   - `RECEIVING_BOT_DAILY_ENABLED=true` only after controlled pilot approval and verified Teams destination.
+   - `RECEIVING_BOT_DAILY_ENABLED=true` only after controlled pilot approval and verified Teams one-to-one chat destination.
 5. After approval, run the **manual** workflow `Deploy Receiving Bot Edge Functions (manual)`. It deploys functions only; the migration must already have been applied.
 6. Point the LINE Messaging API webhook to `https://<project-ref>.supabase.co/functions/v1/line-webhook`. Keep verification enabled and ensure no other collector is unintentionally displaced.
 7. Invite the OA to the actual LINE group, grant the bot group participation permission in LINE Developers, and run a **synthetic** signed webhook test. Do not test using real branch stock adjustments.
-8. Set up Teams Workflows webhook for the correct team/channel. Test a card delivery and consent/permissions.
+8. Set up Teams Workflows **Send webhook alerts to a chat** template configured for the requested personal chat. Test a card delivery and consent/permissions.
 9. Enable daily workflow after a signed-off pilot. GitHub scheduled workflows run on the repository default branch, at 01:00 UTC (08:00 Bangkok), and can execute later than their nominal time.
 
 ## Run tests
