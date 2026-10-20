@@ -1,0 +1,20 @@
+name: Receiving Bot Parser Checks
+on:
+  push:
+    paths:
+      - 'supabase/functions/**'
+      - '.github/workflows/receiving-bot-ci.yml'
+  pull_request:
+    paths:
+      - 'supabase/functions/**'
+permissions:
+  contents: read
+jobs:
+  parser-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: deno test supabase/functions/_shared/parser_test.ts
