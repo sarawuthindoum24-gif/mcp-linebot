@@ -34,7 +34,7 @@
    - `DAILY_REPORT_SECRET`: generate an independent strong random string; match GitHub secret below.
 3. Configure **GitHub repository secrets** (Actions):
    - `SUPABASE_ACCESS_TOKEN` (Supabase Management API/CLI PAT; not LINE channel token).
-   - `SUPABASE_PROJECT_REF`.
+   - Supabase project ref is a non-secret already configured in the gated GitHub Action workflows.
    - `DAILY_REPORT_SECRET`.
 4. Configure **GitHub repository variables** (Actions):
    - `RECEIVING_BOT_DEPLOY_APPROVED=true` only after SQL/schema/signature/test sign-off.
@@ -44,6 +44,14 @@
 7. Invite the OA to the actual LINE group, grant the bot group participation permission in LINE Developers, and run a **synthetic** signed webhook test. Do not test using real branch stock adjustments.
 8. In Microsoft Teams > Workflows, create **Send webhook alerts to a chat** (or a Flow with `When a Teams webhook request is received` followed by `Post a message in a chat or channel` → `Post as: Flow bot` → `Post in: Chat with Flow bot` → recipient selected in the Teams UI). Select the exact intended individual chat using the user-provided recipient account. Save the Flow and put its callback URL into Supabase Edge Function Secret `TEAMS_WEBHOOK_URL`. Do not commit the recipient email or Flow URL to this public repository. Send a synthetic card to verify the actual recipient.
 9. **Only after recipient confirmation, rotated LINE token, signed webhook validation and supervised pilot:** merge this PR into default branch and enable daily workflow. Before that keep `RECEIVING_BOT_DAILY_ENABLED` unset/false.  GitHub scheduled workflows run on the repository default branch, at 01:00 UTC (08:00 Bangkok), and can execute later than their nominal time.
+
+## Remaining manual configuration (required for a real LINE-to-Teams end-to-end test)
+
+1. Supabase Dashboard → Edge Functions → Secrets → create `LINE_CHANNEL_SECRET` from LINE Developers Basic settings. This is NOT the access token previously exposed in chat.
+2. In Microsoft Teams Workflows, create a **personal-chat** incoming webhook / personal-recipient Flow, specifically selecting the intended recipient account there. Store the callback as Supabase secret `TEAMS_WEBHOOK_URL` and a strong `DAILY_REPORT_SECRET` in both Supabase and GitHub Actions Secrets. **No Teams callback URL is configured yet.**
+3. Verify the existing Webhook URL in LINE Developers BEFORE changing it. If the existing `LINE-01-Webhook-Collector` uses the same OA/channel, design an authorized fan-out or replace only after the owner approves. Do not silently break existing collection.
+4. With the secret configured and a valid webhook route, use the LINE Developers Verify button, then send test text in a controlled LINE group. Confirm exactly 5 kg produces 0 rows, 6 kg produces 1 row, repeated message creates no duplicates, and unsend voids items.
+5. Send a synthetic report into the selected personal Teams chat, verify who received it, and review `receiving_report_dispatches` before enabling the 08:00 schedule.
 
 ## Run tests
 
