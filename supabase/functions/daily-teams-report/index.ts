@@ -94,7 +94,7 @@ Deno.serve(async req=>{
   if (!safeEqual(req.headers.get("x-report-secret")||"",env("DAILY_REPORT_SECRET")))
     return new Response("Unauthorized",{status:401});
   const day=bangkokYesterday();
-  const destination="teams-branch-channel";
+  const destination="teams-personal-chat";
   try {
     // Claim first: duplicate invocations do not send twice.
     const claimed=await db("receiving_report_dispatches?on_conflict=report_date,destination","POST",{
@@ -104,7 +104,7 @@ Deno.serve(async req=>{
       return new Response(JSON.stringify({status:"ALREADY_ATTEMPTED",date:day.date}),{status:200});
     try {
       const issues=await loadIssues(day.start,day.end);
-      const response=await fetch(env("TEAMS_WEBHOOK_URL"),{
+      // Webhook must be created from a Microsoft Teams Workflows CHAT template, scoped to the requested 1:1 recipient.\n      const response=await fetch(env("TEAMS_WEBHOOK_URL"),{
         method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify(card(day.date,issues)),
       });
