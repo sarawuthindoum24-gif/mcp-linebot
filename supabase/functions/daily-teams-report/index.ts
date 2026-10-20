@@ -104,7 +104,8 @@ Deno.serve(async req=>{
       return new Response(JSON.stringify({status:"ALREADY_ATTEMPTED",date:day.date}),{status:200});
     try {
       const issues=await loadIssues(day.start,day.end);
-      // Webhook must be created from a Microsoft Teams Workflows CHAT template, scoped to the requested 1:1 recipient.\n      const response=await fetch(env("TEAMS_WEBHOOK_URL"),{
+      // Webhook must be created from a Microsoft Teams Workflows CHAT template, scoped to the requested 1:1 recipient.
+      const response=await fetch(env("TEAMS_WEBHOOK_URL"),{
         method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify(card(day.date,issues)),
       });
