@@ -75,6 +75,11 @@ function syncReceivingIssues() {
     // Download all pages before changing the sheet. An API failure leaves the mirror intact.
     const issues = receivingFetchAll_('issues', secret);
     const dispatches = receivingFetchAll_('dispatches', secret);
+    const groups = receivingFetchAll_('groups', secret);
+    const quality = receivingFetchAll_('quality', secret);
+    const media = receivingFetchAll_('media', secret);
+    const groupById = new Map(groups.map(g => [g.group_id, g]));
+    const groupName = id => receivingText_(groupById.get(id)?.group_name || id || 'ไม่ทราบกลุ่ม');
     const dispatchByDate = new Map(dispatches
       .filter(d => d.destination === 'teams-personal-chat')
       .map(d => [d.report_date, d.status]));
@@ -99,7 +104,7 @@ function syncReceivingIssues() {
         issue.unit === 'kg' ? 'สินค้าชั่ง' : 'สินค้านับ',
         ordered, received, delta, Math.abs(delta), issue.unit,
         issue.variance_type, delta < 0 ? 'รับขาด' : 'รับเกิน',
-        issue.status, 'LINE OA @842nltit', receivingText_(issue.line_message_id), '', '',
+        issue.status, 'LINE OA @842nltit', receivingText_(issue.line_message_id), receivingText_(issue.group_id||''), '',
       ]);
       const key = date + '\u0000' + branch;
       if (!daily.has(key)) daily.set(key, {
@@ -142,10 +147,60 @@ function syncReceivingIssues() {
     receivingWrite_(spreadsheet, 'REPORT_LOG', [
       'report_date','scope','destination','sent_at','status','idempotency_key','error_note',
     ], reportRows);
+    // Quality reporting is separate from the receiving ±5kg rule.
+    const groupRows = groups.map(g => [
+      receivingText_(g.group_id), receivingText_(g.group_name||''),
+      g.route, g.route_source, receivingTimestamp_(g.last_seen_at),
+      receivingTimestamp_(g.created_at),
+    ]);
+    const qualityRows = quality.map(q => [
+      receivingText_(q.line_message_id), receivingText_(q.group_id),
+      groupName(q.group_id), receivingTimestamp_(q.message_at),
+      receivingText_(q.branch), receivingText_(q.product), receivingText_(q.supplier),
+      receivingText_(q.lot), receivingText_(q.quantity_text), receivingText_(q.weight_text),
+      receivingText_(q.defect), receivingText_(q.resolution), receivingText_(q.status),
+      receivingText_(q.raw_text),
+    ]);
+    const qualityMedia = media.filter(m =>
+      m.route === 'QUALITY' || groupById.get(m.group_id)?.route === 'QUALITY');
+    const mediaRows = qualityMedia.map(m => [
+      receivingText_(m.line_message_id), receivingText_(m.group_id),
+      groupName(m.group_id), m.message_type, receivingTimestamp_(m.message_at),
+      'บันทึกรหัสรูปภาพจาก LINE เท่านั้น — ยังไม่ได้ดาวน์โหลดไฟล์',
+    ]);
+    const dailyByGroup = new Map();
+    function groupDaily_(date, id) {
+      const key = date + '|' + (id || '');
+      if (!dailyByGroup.has(key)) dailyByGroup.set(key, {
+        date, id:id||'', receiving:0, quality:0, media:0,
+      });
+      return dailyByGroup.get(key);
+    }
+    for (const issue of issues) groupDaily_(receivingDate_(issue.message_at),issue.group_id).receiving++;
+    for (const q of quality) groupDaily_(receivingDate_(q.message_at),q.group_id).quality++;
+    for (const m of qualityMedia) groupDaily_(receivingDate_(m.message_at),m.group_id).media++;
+    const groupDailyRows = [...dailyByGroup.values()]
+      .sort((a,b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id))
+      .map(g => [g.date, receivingText_(g.id), groupName(g.id),
+        groupById.get(g.id)?.route || 'UNMAPPED',
+        g.receiving, g.quality, g.media, 'รอตรวจสอบ']);
+
+    receivingWrite_(spreadsheet, 'LINE_GROUPS',
+      ['group_id','group_name','route','route_source','last_seen_at','created_at'], groupRows);
+    receivingWrite_(spreadsheet, 'QUALITY_ISSUES',
+      ['line_message_id','group_id','group_name','message_at','branch','product','supplier',
+       'lot','quantity','weight','defect','resolution','status','raw_text'], qualityRows);
+    receivingWrite_(spreadsheet, 'QUALITY_MEDIA',
+      ['line_message_id','group_id','group_name','message_type','message_at','note'], mediaRows);
+    receivingWrite_(spreadsheet, 'GROUP_DAILY',
+      ['date','group_id','group_name','route','receiving_issues','quality_issues',
+       'media_messages','status'], groupDailyRows);
+
     SpreadsheetApp.flush();
-    console.log('Receiving mirror synced: issues=' + issues.length +
-      ', branch-days=' + dailyRows.length + ', dispatches=' + dispatches.length);
-    return { issues: issues.length, branchDays: dailyRows.length, dispatches: dispatches.length };
+    console.log('LINE group mirror synced: issues='+issues.length+', quality='+quality.length+
+      ', media='+qualityMedia.length+', groups='+groups.length+', reports='+dispatches.length);
+    return {issues:issues.length,branchDays:dailyRows.length,quality:quality.length,
+      media:qualityMedia.length,groups:groups.length,dispatches:dispatches.length};
   } finally {
     lock.releaseLock();
   }

@@ -39,13 +39,31 @@ Deno.serve(async (request) => {
   let path: string;
   if (kind === "issues") {
     path = "receiving_issues?" + new URLSearchParams({
-      select: "id,line_message_id,line_item_index,branch,product,issue_date,message_at,ordered_qty,received_qty,delta_qty,unit,variance_type,status",
+      select: "id,line_message_id,line_item_index,branch,product,issue_date,message_at,ordered_qty,received_qty,delta_qty,unit,variance_type,status,group_id",
       is_void: "eq.false", order: "message_at.asc,id.asc", limit: String(limit), offset: String(offset),
     });
   } else if (kind === "dispatches") {
     path = "receiving_report_dispatches?" + new URLSearchParams({
       select: "report_date,destination,status,created_at,updated_at,error_code",
       order: "report_date.asc,destination.asc", limit: String(limit), offset: String(offset),
+    });
+  } else if (kind === "groups") {
+    path = "line_group_registry?" + new URLSearchParams({
+      select: "group_id,group_name,route,route_source,last_seen_at,created_at",
+      order: "group_id.asc", limit: String(limit), offset: String(offset),
+    });
+  } else if (kind === "quality") {
+    path = "line_quality_issues?" + new URLSearchParams({
+      select: "line_message_id,group_id,message_at,branch,product,supplier,lot,quantity_text,weight_text,defect,resolution,status,raw_text",
+      is_void: "eq.false", order: "message_at.asc,line_message_id.asc",
+      limit: String(limit), offset: String(offset),
+    });
+  } else if (kind === "media") {
+    path = "line_group_messages?" + new URLSearchParams({
+      select: "line_message_id,group_id,message_type,message_at,route",
+      message_type: "in.(image,video,file)",
+      is_void: "eq.false", order: "message_at.asc,line_message_id.asc",
+      limit: String(limit), offset: String(offset),
     });
   } else {
     return new Response("Invalid kind", { status: 400 });
