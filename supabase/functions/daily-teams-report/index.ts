@@ -102,8 +102,15 @@ Deno.serve(async req=>{
     const claimed=await db("receiving_report_dispatches?on_conflict=report_date,destination","POST",{
       report_date:day.date,destination,status:"SENDING",
     },"resolution=ignore-duplicates,return=representation");
-    if (!Array.isArray(claimed)||claimed.length===0)
-      return new Response(JSON.stringify({status:"ALREADY_ATTEMPTED",date:day.date}),{status:200});
+    if (!Array.isArray(claimed)||claimed.length===0) {
+      const previous=await db("receiving_report_dispatches?select=status&report_date=eq."+day.date+
+        "&destination=eq."+destination+"&limit=1") as Array<{status:string}>;
+      if (previous?.[0]?.status==="SENT")
+        return Response.json({status:"ALREADY_SENT",date:day.date});
+      // A failed/uncertain previous attempt must not become a false CI success.
+      return Response.json({status:"PREVIOUS_ATTEMPT_REQUIRES_REVIEW",date:day.date,
+        previousStatus:previous?.[0]?.status||"UNKNOWN"},{status:409});
+    }
     try {
       const issues=await loadIssues(day.start,day.end);
       // Webhook must be created from a Microsoft Teams Workflows CHAT template, scoped to the requested 1:1 recipient.
