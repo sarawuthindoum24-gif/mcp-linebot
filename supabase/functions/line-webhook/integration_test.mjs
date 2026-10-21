@@ -5,6 +5,9 @@ import { after, test } from "node:test";
 // in-memory REST stand-in. No real LINE, Supabase, or Teams data is touched.
 const secret = "synthetic-line-secret-for-tests-only";
 const rows = new Map();
+const groups = new Map();
+const messages = new Map();
+const qualityIssues = new Map();
 let handler;
 const originalFetch = globalThis.fetch;
 const originalDeno = globalThis.Deno;
@@ -20,6 +23,33 @@ globalThis.Deno = {
 globalThis.fetch = async (input, options) => {
   const url = new URL(input);
   assert.equal(url.origin, "https://supabase.test");
+  if (url.pathname.endsWith("/line_group_registry")) {
+    const groupId = url.searchParams.get("group_id")?.replace(/^eq\./, "");
+    if (options.method === "GET") return Response.json(groupId && groups.has(groupId) ? [groups.get(groupId)] : []);
+    if (options.method === "POST") {
+      const body=JSON.parse(options.body);
+      if(!groups.has(body.group_id)) groups.set(body.group_id,body);
+      return Response.json(null);
+    }
+    if (options.method === "PATCH") {
+      groups.set(groupId,{...groups.get(groupId),...JSON.parse(options.body)});
+      return Response.json(null);
+    }
+  }
+  if (url.pathname.endsWith("/line_group_messages") ||
+      url.pathname.endsWith("/line_quality_issues")) {
+    const target=url.pathname.endsWith("/line_quality_issues")?qualityIssues:messages;
+    if(options.method==="POST") {
+      const item=JSON.parse(options.body);
+      if(!target.has(item.line_message_id)) target.set(item.line_message_id,{...item,is_void:false});
+      return Response.json(null);
+    }
+    if(options.method==="PATCH") {
+      const id=url.searchParams.get("line_message_id")?.replace(/^eq\./,"");
+      if(target.has(id)) target.set(id,{...target.get(id),...JSON.parse(options.body)});
+      return Response.json(null);
+    }
+  }
   if (url.pathname.endsWith("/receiving_issues")) {
     if (options.method === "POST") {
       for (const item of JSON.parse(options.body)) {
@@ -85,4 +115,36 @@ test("signed +5/-5 kg are excluded; +6/-6 kg are stored once and unsend voids th
     unsend: { messageId: message.message.id },
   }])).status, 200);
   assert.ok([...rows.values()].every(x => x.is_void === true && x.voided_at));
+});
+
+test("two LINE groups stay separate: receiving vs quality and image metadata", async () => {
+  const qualitySource={type:"group",groupId:"quality-group"};
+  const issue={
+    type:"message",timestamp:Date.parse("2026-10-21T10:49:00Z"),
+    source:qualitySource,message:{type:"text",id:"quality-1",text:[
+      "แจ้งปัญหาวัตถุดิบ",
+      "1. สาขา : แคนวาสสุรินทร์",
+      "3. ชื่อสินค้า : เนื้อวัว",
+      "4. ชื่อซัพ : MENA FOOD",
+      "6. Lot หรือวันที่ผลิต : 03/10/2569",
+      "8. น้ำหนัก : 1.530kg",
+      "9. ข้อบกพร่อง : เนื้อสีซีด",
+      "10. แนวทางแก้ไข : ส่งกลับครัวกลาง"
+    ].join("\n")}
+  };
+  assert.equal((await signedRequest([issue])).status,200);
+  assert.equal(groups.get("quality-group").route,"QUALITY");
+  assert.equal(qualityIssues.get("quality-1").product,"เนื้อวัว");
+  assert.equal(qualityIssues.get("quality-1").weight_text,"1.530kg");
+  const image={type:"message",source:qualitySource,timestamp:issue.timestamp,
+    message:{type:"image",id:"quality-image-1"}};
+  assert.equal((await signedRequest([image])).status,200);
+  assert.equal(messages.get("quality-image-1").route,"QUALITY");
+  assert.equal((await signedRequest([issue])).status,200);
+  assert.equal(qualityIssues.size,1);
+  assert.equal((await signedRequest([{
+    type:"unsend",source:qualitySource,unsend:{messageId:"quality-1"}
+  }])).status,200);
+  assert.equal(qualityIssues.get("quality-1").is_void,true);
+  assert.equal(rows.size,2);
 });
