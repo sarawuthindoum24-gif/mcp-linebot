@@ -25,3 +25,25 @@ Deno.test("extract quality fields from numbered Thai incident without kg exclusi
      q.weight_text!=="1.530kg"||!q.defect?.includes("สีซีด")||!q.resolution?.includes("ครัวกลาง"))
     throw Error(JSON.stringify(q));
 });
+
+Deno.test("extract fields from actual Terminal 21 Korat LINE quality report",()=>{
+  const raw=[
+    "แจ้งปัญหาวัตถุดิบ",
+    "1. สาขา : เทอร์มินอล 21 โคราช",
+    "2. วันที่แจ้ง :21/10/69",
+    "3. ชื่อสินค้า : เนื้อวัวสันคอ",
+    "4. ชื่อซัพพลายเออร์ : มีนา ฟู๊ด",
+    "5. วันที่ได้รับสินค้า : 18/10/69",
+    "6. ผลิตวันที่ :09/10/69",
+    "   หมดอายุ :08/01/70",
+    "7. จำนวน : 1 ก้อน",
+    "8. น้ำหนัก : 0.74 Kg",
+    "9. ข้อบกพร่องหรือปัญหา :เนื้อวัวสันคอ มีเอ็นแข็งและมันเหลือง ไม่สามารถจัดเสริฟได้",
+    "10. การจัดการ : ทำการส่งคืนครัวกลาง ตามรอบส่งเพื่อทำการตรวจสอบ",
+  ].join("\n");
+  const q=parseQualityMessage(raw);
+  if(q.branch!=="เทอร์มินอล 21 โคราช" ||q.product!=="เนื้อวัวสันคอ" ||
+    q.supplier!=="มีนา ฟู๊ด" || q.lot!=="09/10/69" ||
+    !q.defect?.includes("เอ็นแข็ง") ||!q.resolution?.includes("ส่งคืนครัวกลาง") ||
+    q.weight_text!=="0.74 Kg") throw Error(JSON.stringify(q));
+});
