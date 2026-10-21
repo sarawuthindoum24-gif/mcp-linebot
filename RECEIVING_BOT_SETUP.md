@@ -1,5 +1,14 @@
 # BNN Receiving Issue Bot — Supabase-first (Production rollout)
 
+## Receiving tolerance policy updated — 21 October 2026
+
+- **Shortage (any quantity):** every negative difference is reported, for counted and weighed items. For weighed items, show the category **น้ำหนักชั่งขาด** (weighed shortage).
+- **Overage:** up to and including **3% of ordered quantity** is accepted; strictly greater than 3% is reported. If ordered quantity is zero but something arrives, it is reported as overage.
+- `delta_qty = received_qty - ordered_qty`. Percentage `delta_qty * 100 / ordered_qty` only when ordered quantity is positive.
+- This replaces the old ±5 kg exclusion; the Postgres check constraint, parser, Apps Script mirror, and Teams daily-report labels are updated together.
+- Quality-issue messages in the other LINE group are unaffected. Historical test/release notes below may mention the superseded rule; they remain for audit.
+
+
 ## Production verification — 21 Oct 2026
 
 - **Daily Teams delivery enabled in `main`:** GitHub Actions `receiving-bot-daily.yml` runs at `0 1 * * *` UTC (nominal 08:00 Asia/Bangkok), with `RECEIVING_BOT_DAILY_PAUSED=true` available as an emergency stop switch. The first scheduled run must still be observed.
