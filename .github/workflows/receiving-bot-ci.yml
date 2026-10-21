@@ -19,8 +19,8 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - run: deno test supabase/functions/_shared/parser_test.ts
-      - run: deno check supabase/functions/line-webhook/index.ts supabase/functions/daily-teams-report/index.ts supabase/functions/sheets-export/index.ts
+      - run: deno test supabase/functions/_shared/parser_test.ts supabase/functions/_shared/group-routing_test.ts
+      - run: deno check supabase/functions/line-webhook/index.ts supabase/functions/daily-teams-report/index.ts supabase/functions/sheets-export/index.ts supabase/functions/_shared/group-routing.ts
       - uses: actions/setup-node@v4
         with:
           node-version: '26'
