@@ -5,3 +5,6 @@ verify_jwt = false
 
 [functions.daily-teams-report]
 verify_jwt = false
+
+[functions.sheets-export]
+verify_jwt = false
