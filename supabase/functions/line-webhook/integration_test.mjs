@@ -94,22 +94,22 @@ test("invalid signature cannot write rows", async () => {
   assert.equal(rows.size, before);
 });
 
-test("signed +5/-5 kg are excluded; +6/-6 kg are stored once and unsend voids them", async () => {
+test("any shortage recorded, overages <=3% ignored, duplicates and unsend handled", async () => {
   const message = {
     type: "message", timestamp: Date.parse("2026-10-20T03:00:00Z"),
     source: { type: "group", groupId: "synthetic-group" },
     message: { type: "text", id: "synthetic-message-1", text: [
       "สาขา ทดสอบ แจ้งปัญหา",
-      "- A ยอดสั่ง 10 กก. ได้รับจริง 15 กก.",
-      "- B ยอดสั่ง 15 กก. ได้รับจริง 10 กก.",
-      "- C ยอดสั่ง 10 กก. ได้รับจริง 16 กก.",
-      "- D ยอดสั่ง 16 กก. ได้รับจริง 10 กก.",
+      "- A ยอดสั่ง 100 กก. ได้รับจริง 103 กก.",
+      "- B ยอดสั่ง 100 กก. ได้รับจริง 99.9 กก.",
+      "- C ยอดสั่ง 100 กก. ได้รับจริง 103.1 กก.",
+      "- D ยอดสั่ง 100 กก. ได้รับจริง 97 กก.",
     ].join("\n") },
   };
   assert.equal((await signedRequest([message])).status, 200);
-  assert.deepEqual([...rows.values()].map(x => x.delta_qty), [6, -6]);
+  assert.deepEqual([...rows.values()].map(x => x.delta_qty), [-0.1, 3.1, -3]);
   assert.equal((await signedRequest([message])).status, 200);
-  assert.equal(rows.size, 2);
+  assert.equal(rows.size, 3);
   assert.equal((await signedRequest([{
     type: "unsend", source: message.source,
     unsend: { messageId: message.message.id },
@@ -146,5 +146,5 @@ test("two LINE groups stay separate: receiving vs quality and image metadata", a
     type:"unsend",source:qualitySource,unsend:{messageId:"quality-1"}
   }])).status,200);
   assert.equal(qualityIssues.get("quality-1").is_void,true);
-  assert.equal(rows.size,2);
+  assert.equal(rows.size,3);
 });
