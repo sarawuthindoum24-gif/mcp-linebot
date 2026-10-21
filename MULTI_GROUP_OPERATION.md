@@ -7,7 +7,7 @@
 - `line_group_registry` maps group IDs to `RECEIVING`, `QUALITY`, or `UNMAPPED`. Once classified, the route is stable until changed by an administrator.
 - The bot tries LINE's Group Summary API (`GET /v2/bot/group/{groupId}/summary`) **only when** `LINE_CHANNEL_ACCESS_TOKEN` is safely configured in Supabase Edge Function secrets. Do not paste tokens into issues, chat, or code. If no token is configured, the bot uses conservative content hints to initialize the route and stores the group ID; the name stays unverified/null. Administrators can set `group_name` and `route` in the Supabase dashboard after a real group message appears.
 - Messages from unmapped groups remain in `line_group_messages` for later review, not mixed into business reports. Quality-group text is stored in `line_quality_issues`; image/video/file events have **metadata/message IDs only** in `line_group_messages`, not file contents.
-- Receiving messages continue using the existing deterministic parser and >5kg filter. Quality cases do **not** apply the ±5kg exclusion.
+- Receiving messages use the deterministic parser: every shortage is recorded as an issue, and positive overages only above 3% of the ordered quantity are recorded. The category for a weighed item shortage is **น้ำหนักชั่งขาด**. Quality cases are independent of the receiving variance thresholds.
 - Duplicate message IDs are ignored; unsend marks rows void. RLS protects all new tables and no public policies were created.
 
 ## Existing Google Sheet

@@ -94,8 +94,11 @@ function syncReceivingIssues() {
       const received = receivingNumber_(issue.received_qty);
       if (Math.abs((received - ordered) - delta) > 0.001)
         throw new Error('Quantity mismatch in export');
-      if (issue.unit === 'kg' && Math.abs(delta) <= 5)
-        throw new Error('Excluded weighted issue in export');
+      // Zero shortages permitted; overages up to and including 3% are accepted.
+      // All exported receiving_issues must therefore exceed the allowed tolerance.
+      if (delta === 0 || (delta > 0 && ordered > 0 &&
+          Math.round(delta * 1000) * 100 <= Math.round(ordered * 1000) * 3))
+        throw new Error('Accepted variance unexpectedly included in receiving issues export');
       const date = receivingDate_(issue.message_at);
       const branch = String(issue.branch);
       issueRows.push([
@@ -103,19 +106,24 @@ function syncReceivingIssues() {
         receivingText_(branch), receivingText_(issue.product),
         issue.unit === 'kg' ? 'สินค้าชั่ง' : 'สินค้านับ',
         ordered, received, delta, Math.abs(delta), issue.unit,
-        issue.variance_type, delta < 0 ? 'รับขาด' : 'รับเกิน',
+        issue.variance_type, delta < 0 ?
+          (issue.unit === 'kg' ? 'น้ำหนักชั่งขาด' : 'รับขาด') : 'รับเกินเกณฑ์ 3%',
         issue.status, 'LINE OA @842nltit', receivingText_(issue.line_message_id), receivingText_(issue.group_id||''), '',
       ]);
       const key = date + '\u0000' + branch;
       if (!daily.has(key)) daily.set(key, {
         date, branch, count: 0, short: 0, over: 0,
-        shortKg: 0, overKg: 0, other: 0, pending: 0, products: [],
+        shortKg: 0, overKg: 0, other: 0, weightShortCount: 0,
+        pending: 0, products: [],
       });
       const group = daily.get(key);
       group.count++;
       if (delta < 0) group.short++; else group.over++;
       if (issue.unit === 'kg') {
-        if (delta < 0) group.shortKg += Math.abs(delta);
+        if (delta < 0) {
+          group.shortKg += Math.abs(delta);
+          group.weightShortCount++;
+        }
         else group.overKg += delta;
       } else group.other++;
       if (issue.status === 'PENDING_REVIEW') group.pending++;
@@ -124,7 +132,9 @@ function syncReceivingIssues() {
     const dailyRows = [...daily.values()]
       .sort((a, b) => a.date.localeCompare(b.date) || a.branch.localeCompare(b.branch, 'th'))
       .map(g => [g.date, receivingText_(g.branch), g.count, g.short, g.over,
-        g.shortKg, g.overKg, g.other, g.pending, g.products.join(', '),
+        g.shortKg, g.overKg, g.other, g.pending,
+        (g.weightShortCount ? 'น้ำหนักชั่งขาด ' + g.weightShortCount + ' รายการ | ' : '') +
+          g.products.join(', '),
         'รอตรวจสอบ', 'ตรวจใบส่งของและหลักฐานรับสินค้า',
         dispatchByDate.get(g.date) || 'ยังไม่ส่ง']);
     const reportRows = dispatches.map(d => [
@@ -147,7 +157,7 @@ function syncReceivingIssues() {
     receivingWrite_(spreadsheet, 'REPORT_LOG', [
       'report_date','scope','destination','sent_at','status','idempotency_key','error_note',
     ], reportRows);
-    // Quality reporting is separate from the receiving ±5kg rule.
+    // Quality reporting is independent of receiving's zero-shortage/3%-overage policy.
     const groupRows = groups.map(g => [
       receivingText_(g.group_id), receivingText_(g.group_name||''),
       g.route, g.route_source, receivingTimestamp_(g.last_seen_at),
