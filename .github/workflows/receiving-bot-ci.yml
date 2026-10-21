@@ -26,3 +26,4 @@ jobs:
           node-version: '26'
       - run: node --experimental-strip-types --test supabase/functions/line-webhook/integration_test.mjs
       - run: node -e "JSON.parse(require('node:fs').readFileSync('apps-script/appsscript.json','utf8'))"
+      - run: node --check 'apps-script/รหัส.js'
