@@ -3,10 +3,12 @@ on:
   push:
     paths:
       - 'supabase/functions/**'
+      - 'apps-script/**'
       - '.github/workflows/receiving-bot-ci.yml'
   pull_request:
     paths:
       - 'supabase/functions/**'
+      - 'apps-script/**'
 permissions:
   contents: read
 jobs:
@@ -23,3 +25,4 @@ jobs:
         with:
           node-version: '26'
       - run: node --experimental-strip-types --test supabase/functions/line-webhook/integration_test.mjs
+      - run: node -e "JSON.parse(require('node:fs').readFileSync('apps-script/appsscript.json','utf8'))"
