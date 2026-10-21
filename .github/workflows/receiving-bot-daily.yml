@@ -1,0 +1,29 @@
+name: Receiving Bot Daily Teams Report
+on:
+  schedule:
+    # 08:00 Asia/Bangkok = 01:00 UTC; GitHub schedules may be delayed.
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  send:
+    # Enabled for the requested daily schedule. Set repository variable
+    # RECEIVING_BOT_DAILY_PAUSED=true to stop future sends without changing code.
+    if: ${{ vars.RECEIVING_BOT_DAILY_PAUSED != 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger daily summary
+        env:
+          SUPABASE_PROJECT_REF: gevivzvlfloaczpunymx
+          DAILY_REPORT_SECRET: ${{ secrets.DAILY_REPORT_SECRET }}
+        run: |
+          if [ -z "$DAILY_REPORT_SECRET" ]; then
+            echo "DAILY_REPORT_SECRET is missing from GitHub Actions secrets" >&2
+            exit 1
+          fi
+          curl --fail-with-body --silent --show-error --retry 2 \
+            -X POST "https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/daily-teams-report" \
+            -H "x-report-secret: ${DAILY_REPORT_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d '{}'

@@ -1,0 +1,19 @@
+name: Deploy Receiving Bot Edge Functions (manual)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  deploy:
+    if: ${{ vars.RECEIVING_BOT_DEPLOY_APPROVED == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: gevivzvlfloaczpunymx
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v2
+        with:
+          version: latest
+      - run: supabase functions deploy line-webhook --project-ref "$SUPABASE_PROJECT_REF"
+      - run: supabase functions deploy daily-teams-report --project-ref "$SUPABASE_PROJECT_REF"

@@ -1,0 +1,29 @@
+name: Receiving Bot Parser Checks
+on:
+  push:
+    paths:
+      - 'supabase/functions/**'
+      - 'apps-script/**'
+      - '.github/workflows/receiving-bot-ci.yml'
+  pull_request:
+    paths:
+      - 'supabase/functions/**'
+      - 'apps-script/**'
+permissions:
+  contents: read
+jobs:
+  parser-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: deno test supabase/functions/_shared/parser_test.ts
+      - run: deno check supabase/functions/line-webhook/index.ts supabase/functions/daily-teams-report/index.ts supabase/functions/sheets-export/index.ts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+      - run: node --experimental-strip-types --test supabase/functions/line-webhook/integration_test.mjs
+      - run: node -e "JSON.parse(require('node:fs').readFileSync('apps-script/appsscript.json','utf8'))"
+      - run: node --check 'apps-script/รหัส.js'
