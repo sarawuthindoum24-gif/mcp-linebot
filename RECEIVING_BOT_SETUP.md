@@ -1,5 +1,16 @@
 # BNN Receiving Issue Bot — Supabase-first (Draft)
 
+## Release checkpoint — 21 Oct 2026 (20:45 Bangkok)
+
+- Existing Apps Script project `1orBKwfDOA8FntozbWpy-agunJM0ZC3O_nJFfEUlIRW4ZOzuQk_9i-5gA` was cloned/backed up and updated **in place** using authenticated clasp; remote readback confirmed the idempotent `installReceivingSyncTrigger` guard and read-only `auditReceivingSyncSetup`. The saved live manifest was already valid; the browser's extra brace was unsaved.
+- The actual Apps Script 15-minute trigger remains **UNVERIFIED**: `clasp run` returns Google NOT_FOUND because an API Executable + standard Cloud project/OAuth setup is absent. **Do not create a duplicate trigger** until the existing project's Triggers page or execution API can be checked.
+- Supabase `daily-teams-report` v20 has been deployed with two safeguards: a second call to a FAILED/SENDING report returns HTTP 409 (not false success), and zero-issue cards warn that real LINE-group delivery is not yet confirmed.
+- An earlier report dated 2026-10-20 reached the intended Teams personal chat on 21 Oct 19:40, with a matching Supabase SENT dispatch and Sheets REPORT_LOG row. Never resend it.
+- Existing GitHub Actions daily workflow now follows the user's explicit request: nominally 08:00 Asia/Bangkok (01:00 UTC) once merged into the default branch, with `RECEIVING_BOT_DAILY_PAUSED=true` available as a pause switch. GitHub schedules may start late.
+- **Caveat:** LINE Developers Verify and signed synthetic tests passed, but no real group message has been observed. Daily empty-data reports must NOT be interpreted as proof there were no receiving problems.
+- Previously exposed LINE access tokens must be rotated and kept outside chats/repositories; webhook signatures rely on the separate channel secret.
+
+
 **Status (live audit, 21 Oct 2026):** DATABASE CREATED + EDGE FUNCTIONS DEPLOYED / LINE OA WEBHOOK MOVED TO SUPABASE AND LINE VERIFY SUCCEEDED / `LINE-01-Webhook-Collector` OFF / LIVE SIGNED SYNTHETIC WEBHOOK AND DATABASE READBACK PASSED / PERSONAL TEAMS PILOT FLOW DELIVERED A SYNTHETIC CARD TO THE INTENDED 1:1 CHAT / SUPABASE-TO-TEAMS ROUTE AND 08:00 SCHEDULE STILL DISABLED. No real LINE group message or Supabase-generated Teams report has yet been observed.
 
 ## Business logic
