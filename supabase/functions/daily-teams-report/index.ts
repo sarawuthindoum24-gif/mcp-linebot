@@ -60,7 +60,7 @@ function card(date:string, issues:Issue[]) {
     type:"TextBlock", text:"รายงานปัญหาการรับสินค้า ประจำวันที่ "+date,
     weight:"Bolder", size:"Medium", wrap:true,
   },{
-    type:"TextBlock", text:"สรุปตามเวลารับข้อความ 00:00–23:59 น. (ประเทศไทย) | เฉพาะรายการที่ผ่านเกณฑ์",
+    type:"TextBlock", text:"เวลาไทย 00:00–23:59 | รับขาดทุกจำนวน / รับเกินมากกว่า 3% ของยอดสั่ง",
     wrap:true, isSubtle:true,
   },{
     type:"TextBlock", text:"รวม "+issues.length+" รายการ จาก "+byBranch.size+" สาขา",
@@ -72,8 +72,12 @@ function card(date:string, issues:Issue[]) {
     const over=values.filter(v=>v.variance_type==="OVER");
     const kgShort=shortage.filter(x=>x.unit==="kg").reduce((s,x)=>s+Math.abs(x.delta_qty),0);
     const kgOver=over.filter(x=>x.unit==="kg").reduce((s,x)=>s+x.delta_qty,0);
-    const top=values.slice(0,3).map(v=>v.product+" ("+(v.variance_type==="SHORT"?"ขาด ":"เกิน ")+Math.abs(v.delta_qty)+" "+v.unit+")").join(", ");
-    const info="ขาด "+shortage.length+" รายการ ("+kgShort.toFixed(3)+" กก.) | เกิน "+over.length+
+    const weightShort=shortage.filter(v=>v.unit==="kg");
+    const top=values.slice(0,3).map(v=>v.product+" ("+
+      (v.variance_type==="SHORT" ? (v.unit==="kg" ? "น้ำหนักชั่งขาด " : "รับขาด ") :
+       "รับเกินเกณฑ์ 3% ")+Math.abs(v.delta_qty)+" "+v.unit+")").join(", ");
+    const info="รับขาด "+shortage.length+" รายการ (น้ำหนักชั่งขาด "+weightShort.length+
+      " รายการ, "+kgShort.toFixed(3)+" กก.) | รับเกินเกณฑ์ 3% "+over.length+
       " รายการ ("+kgOver.toFixed(3)+" กก.)";
     const text=branch+": "+info+"\nสินค้าที่พบ: "+top+(values.length>3?" และอีก "+(values.length-3)+" รายการ":"")+
       "\nข้อเสนอแนะ: ตรวจสอบใบหยิบ/ใบส่งของและหลักฐานรับสินค้า; สาเหตุรอตรวจสอบ";
