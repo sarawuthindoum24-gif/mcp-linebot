@@ -1,5 +1,15 @@
 # BNN Receiving Issue Bot — Supabase-first (Draft)
 
+## Production verification — 21 Oct 2026
+
+- **Daily Teams delivery enabled in `main`:** GitHub Actions `receiving-bot-daily.yml` runs at `0 1 * * *` UTC (nominal 08:00 Asia/Bangkok), with `RECEIVING_BOT_DAILY_PAUSED=true` available as an emergency stop switch. The first scheduled run must still be observed.
+- **Immediate GitHub Actions smoke test passed** (run `39612634997`) with the existing report secret. The 2026-10-20 report remained exactly one `SENT` dispatch; no second Teams card was requested. The temporary push-test trigger was removed again.
+- **Supabase daily-teams-report v20 ACTIVE**, with failed/uncertain duplicate dispatches returning 409 instead of falsely reporting success. The zero-issues report explicitly warns until live LINE group intake is verified.
+- **Existing Apps Script updated IN PLACE:** script ID `1orBKwfDOA8FntozbWpy-agunJM0ZC3O_nJFfEUlIRW4ZOzuQk_9i-5gA`. Backed up first, then pushed the non-destructive `installReceivingSyncTrigger` and read-only audit function through authenticated clasp. Pulled the live version back and verified the edited functions exist. The saved remote manifest is valid.
+- **Still pending:** No evidence of a recurring Apps Script 15-minute trigger. Apps Script Execution API calls from clasp return Google storage NOT_FOUND because the API Executable setup is missing; do not create a duplicate GCP project or install triggers blindly. The last observed `sheets-export` calls were ~19:53 Bangkok. A controlled actual LINE group message has not been observed either. These are explicit readiness/coverage caveats, not evidence of zero receiving issues.
+- **Security:** Previously exposed LINE access tokens should be rotated. No tokens, signed callback URLs, or secret values belong in GitHub, Sheets, or chat.
+
+
 ## Release checkpoint — 21 Oct 2026 (20:45 Bangkok)
 
 - Existing Apps Script project `1orBKwfDOA8FntozbWpy-agunJM0ZC3O_nJFfEUlIRW4ZOzuQk_9i-5gA` was cloned/backed up and updated **in place** using authenticated clasp; remote readback confirmed the idempotent `installReceivingSyncTrigger` guard and read-only `auditReceivingSyncSetup`. The saved live manifest was already valid; the browser's extra brace was unsaved.
