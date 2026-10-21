@@ -25,7 +25,7 @@
 
 ## Configuration (never commit tokens)
 
-1. **Completed 20 Oct 2026:** Supabase project `gevivzvlfloaczpunymx` is ACTIVE_HEALTHY; tables created via migration; Edge Functions `line-webhook` and `daily-teams-report` deployed (both v6 on 21 Oct). Their live source files match this branch after line-ending normalization. Validate everything with synthetic test messages before production.
+1. **Verified 21 Oct 2026:** Supabase project `gevivzvlfloaczpunymx` is ACTIVE_HEALTHY; tables exist with RLS enabled. Edge Functions `line-webhook` v10 and `daily-teams-report` v11 are ACTIVE. Version 11 returns HTTP 503 while `DAILY_REPORT_SECRET` is absent; the repository branch includes that fail-closed change. Validate everything with synthetic test messages before production.
 2. Configure **Supabase Edge Function secrets**:
    - `LINE_CHANNEL_SECRET`: from LINE Developers > Basic settings (NOT the channel access token).
    - `SUPABASE_URL`: project API URL (normally available to Edge Functions).
@@ -75,10 +75,10 @@ deno test supabase/functions/_shared/parser_test.ts
 
 - Supabase project: `gevivzvlfloaczpunymx` (`ACTIVE_HEALTHY`)
 - Tables created: `public.receiving_issues`, `public.receiving_parse_review`, `public.receiving_report_dispatches` (RLS enabled; no public policies)
-- Functions: `line-webhook` v6 `ACTIVE`; `daily-teams-report` v6 `ACTIVE`. Live source matches the repository branch after line-ending normalization.
+- Functions: `line-webhook` v10 `ACTIVE`; `daily-teams-report` v11 `ACTIVE`. The v11 report function returns HTTP 503 when `DAILY_REPORT_SECRET` is missing; a 21 Oct direct request confirmed this and created no dispatch row.
 - LINE destination: `@842nltit` has Use webhook ON and points to the Supabase `line-webhook` function. LINE Developers Verify returned Success after the move. Pre-existing LINE-01 Power Automate Flow is Off.
 - Teams destination: the Pilot Flow was turned Off after its callback was posted in chat. The replacement Live Flow is On for `Tun.Sarawut@bnngroup.net`; a direct synthetic card returned HTTP 202, its run succeeded, and the exact card was found in that account's Workflows personal chat. The Codex Teams connector has not been connected; Supabase daily-function delivery remains untested.
 - CI: parser tests and Edge Function type checks succeeded on latest implementation commit
-- Supabase Edge Function Secrets has a matching `LINE_CHANNEL_SECRET`. `TEAMS_WEBHOOK_URL` exists but its digest matches the callback of the disabled Pilot Flow, not the replacement Live Flow; `DAILY_REPORT_SECRET` is absent. The unintended `Channel access token` entry was removed. GitHub Actions has **no repository secrets or variables** as of the latest audit.
+- Supabase Edge Function Secrets has a matching `LINE_CHANNEL_SECRET`. `TEAMS_WEBHOOK_URL` exists but its digest matches the callback of the disabled Pilot Flow, not the replacement Live Flow; `DAILY_REPORT_SECRET` is absent. The unintended `Channel access token` entry was removed. GitHub Actions has **no repository secrets or variables** as of the 21 Oct audit, so the daily job remains disabled.
 - The account owner reported reissuing the access token previously provided in ChatGPT. A later UI inspection accidentally surfaced the then-current token in an internal tool result, and a subsequent chat reply exposed another reissued token. The account owner must reissue again after setup and keep the new token out of chat. Never put the token in a file, tool arguments, migration, or secret log.
 - Local synthetic signed-handler test covers invalid signature, +5/-5 kg exclusion, +6/-6 kg storage, duplicate delivery, and unsend. A transaction-rolled-back database test passed the same quantity, duplicate, and void checks. The deployed function returned HTTP 200 for direct signed synthetic events; database readback confirmed +5/-5 excluded, +6/-7 stored, duplicate suppressed, and unsend voided both stored rows. Tagged synthetic rows were then removed and a zero-row readback passed. These tests do not prove that a real LINE group message has reached the new route.
