@@ -8,7 +8,9 @@ permissions:
   contents: read
 jobs:
   send:
-    if: ${{ vars.RECEIVING_BOT_DAILY_ENABLED == 'true' }}
+    # Enabled for the requested daily schedule. Set repository variable
+    # RECEIVING_BOT_DAILY_PAUSED=true to stop future sends without changing code.
+    if: ${{ vars.RECEIVING_BOT_DAILY_PAUSED != 'true' }}
     runs-on: ubuntu-latest
     steps:
       - name: Trigger daily summary
@@ -16,6 +18,10 @@ jobs:
           SUPABASE_PROJECT_REF: gevivzvlfloaczpunymx
           DAILY_REPORT_SECRET: ${{ secrets.DAILY_REPORT_SECRET }}
         run: |
+          if [ -z "$DAILY_REPORT_SECRET" ]; then
+            echo "DAILY_REPORT_SECRET is missing from GitHub Actions secrets" >&2
+            exit 1
+          fi
           curl --fail-with-body --silent --show-error --retry 2 \
             -X POST "https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/daily-teams-report" \
             -H "x-report-secret: ${DAILY_REPORT_SECRET}" \
