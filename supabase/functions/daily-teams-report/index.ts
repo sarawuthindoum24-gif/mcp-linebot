@@ -82,7 +82,7 @@ function card(date:string, issues:Issue[]) {
     included++;
   }
   if (included < byBranch.size) blocks.push({type:"TextBlock",text:"รายชื่อสาขาบางส่วนถูกย่อเพื่อจำกัดขนาดข้อความ โปรดดูฐานข้อมูล Supabase เพื่อดูข้อมูลทั้งหมด",wrap:true});
-  if (!issues.length) blocks.push({type:"TextBlock", text:"ไม่มีรายการปัญหาที่เข้าเกณฑ์สำหรับวันนี้",wrap:true});
+  if (!issues.length) blocks.push({type:"TextBlock", text:"ไม่พบรายการปัญหาที่เข้าเกณฑ์ในฐานข้อมูลสำหรับวันนี้ (กรุณายืนยันว่า LINE กลุ่มส่งข้อมูลเข้าระบบก่อนสรุปว่าไม่มีปัญหา)",wrap:true});
   return {type:"message", attachments:[{
     contentType:"application/vnd.microsoft.card.adaptive", contentUrl:null,
     content:{"$schema":"http://adaptivecards.io/schemas/adaptive-card.json",
