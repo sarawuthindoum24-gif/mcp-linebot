@@ -91,7 +91,9 @@ function card(date:string, issues:Issue[]) {
 }
 Deno.serve(async req=>{
   if (req.method !== "POST") return new Response("Method not allowed",{status:405});
-  if (!safeEqual(req.headers.get("x-report-secret")||"",env("DAILY_REPORT_SECRET")))
+  const reportSecret = Deno.env.get("DAILY_REPORT_SECRET");
+  if (!reportSecret) return new Response("Report secret not configured",{status:503});
+  if (!safeEqual(req.headers.get("x-report-secret")||"",reportSecret))
     return new Response("Unauthorized",{status:401});
   const day=bangkokYesterday();
   const destination="teams-personal-chat";
