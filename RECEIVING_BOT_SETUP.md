@@ -1,4 +1,4 @@
-# BNN Receiving Issue Bot — Supabase-first (Draft)
+# BNN Receiving Issue Bot — Supabase-first (Production rollout)
 
 ## Production verification — 21 Oct 2026
 
@@ -21,7 +21,7 @@
 - Previously exposed LINE access tokens must be rotated and kept outside chats/repositories; webhook signatures rely on the separate channel secret.
 
 
-**Status (live audit, 21 Oct 2026):** DATABASE CREATED + EDGE FUNCTIONS DEPLOYED / LINE OA WEBHOOK MOVED TO SUPABASE AND LINE VERIFY SUCCEEDED / `LINE-01-Webhook-Collector` OFF / LIVE SIGNED SYNTHETIC WEBHOOK AND DATABASE READBACK PASSED / PERSONAL TEAMS PILOT FLOW DELIVERED A SYNTHETIC CARD TO THE INTENDED 1:1 CHAT / SUPABASE-TO-TEAMS ROUTE AND 08:00 SCHEDULE STILL DISABLED. No real LINE group message or Supabase-generated Teams report has yet been observed.
+**Historical checkpoint (21 Oct 2026, before production merge):** See the production-verification section above for the current released state. Earlier draft observations are retained for audit only.
 
 ## Business logic
 
