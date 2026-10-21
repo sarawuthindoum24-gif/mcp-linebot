@@ -41,11 +41,11 @@ export function parseQualityMessage(raw: string): QualityRecord {
   return {
     branch: first("สาขา"),
     product: first("ชื่อสินค้า","สินค้า"),
-    supplier: first("ชื่อซัพ","ซัพพลายเออร์","Supplier","ผู้ผลิต"),
-    lot: first("Lotหรือวันที่ผลิต","Lot","เลขล็อต","Lotหรือวันผลิต"),
+    supplier: first("ชื่อซัพพลายเออร์","ชื่อซัพ","ซัพพลายเออร์","Supplier","ผู้ผลิต"),
+    lot: first("Lotหรือวันที่ผลิต","Lot","เลขล็อต","Lotหรือวันผลิต","ผลิตวันที่","วันที่ผลิต"),
     quantity_text: first("จำนวน","จำนวนสินค้า"),
     weight_text: first("น้ำหนัก","น้ำหนักสินค้า"),
-    defect: first("ข้อบกพร่อง","ปัญหา","ลักษณะปัญหา"),
-    resolution: first("แนวทางแก้ไข","การดำเนินการ","วิธีแก้ไข"),
+    defect: first("ข้อบกพร่องหรือปัญหา","ข้อบกพร่อง","ปัญหา","ลักษณะปัญหา"),
+    resolution: first("การจัดการ","แนวทางแก้ไข","การดำเนินการ","วิธีแก้ไข"),
   };
 }
