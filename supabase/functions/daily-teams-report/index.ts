@@ -119,6 +119,62 @@ Deno.serve(async req=>{
   }
   if (!validGitHubSecret && !validVaultCronToken)
     return new Response("Unauthorized",{status:401});
+  // Explicitly requested Teams connectivity test. Never touches the scheduled
+  // report's idempotency record and is restricted to one request per local day.
+  const requestBody = await req.json().catch(() => ({})) as {test_send_once?:boolean};
+  if (requestBody?.test_send_once === true) {
+    const yesterday=bangkokYesterday();
+    const testDate=new Date(Date.parse(yesterday.date+"T00:00:00Z")+86400000)
+      .toISOString().slice(0,10);
+    const testDestination="teams-personal-chat-TEST";
+    const query="receiving_report_dispatches?report_date=eq."+testDate+
+      "&destination=eq."+testDestination;
+    try {
+      const claimed=await db("receiving_report_dispatches?on_conflict=report_date,destination",
+        "POST",{report_date:testDate,destination:testDestination,status:"SENDING"},
+        "resolution=ignore-duplicates,return=representation");
+      if (!Array.isArray(claimed) || claimed.length===0)
+        return Response.json({status:"TEST_ALREADY_ATTEMPTED",date:testDate});
+      const sentAt=new Date().toLocaleString("th-TH",{
+        timeZone:"Asia/Bangkok",hour12:false});
+      const testCard={
+        type:"message",
+        attachments:[{
+          contentType:"application/vnd.microsoft.card.adaptive",
+          contentUrl:null,
+          content:{
+            "$schema":"http://adaptivecards.io/schemas/adaptive-card.json",
+            type:"AdaptiveCard",version:"1.2",body:[
+              {type:"TextBlock",text:"WHservice | ทดสอบการเชื่อมต่อ Teams",weight:"Bolder",
+                size:"Medium",wrap:true},
+              {type:"TextBlock",text:"ข้อความทดสอบ 1 ครั้ง • "+sentAt+" (เวลาไทย)",wrap:true},
+              {type:"TextBlock",text:"ทดสอบเส้นทาง Supabase → Teams ส่วนตัวสำเร็จเมื่อได้รับข้อความนี้",
+                wrap:true},
+              {type:"TextBlock",text:"ไม่ใช่รายงานสินค้าจริง และไม่มีการสร้างรายการปัญหา",
+                wrap:true,isSubtle:true},
+            ],
+          },
+        }],
+      };
+      const response=await fetch(env("TEAMS_WEBHOOK_URL"),{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify(testCard),
+      });
+      if (!response.ok) throw new Error("TEAMS_TEST_HTTP_"+response.status);
+      await db(query,"PATCH",{
+        status:"SENT",updated_at:new Date().toISOString(),error_code:null,
+      });
+      return Response.json({status:"TEST_ACCEPTED_BY_TEAMS_WORKFLOW",
+        date:testDate,webhook_http_status:response.status});
+    } catch (error) {
+      const code=error instanceof Error?error.message.slice(0,70):"UNKNOWN";
+      await db(query,"PATCH",{
+        status:"FAILED",updated_at:new Date().toISOString(),error_code:code,
+      }).catch(()=>{});
+      return Response.json({status:"TEST_FAILED",date:testDate,error_code:code},{status:502});
+    }
+  }
+
   const day=bangkokYesterday();
   const destination="teams-personal-chat";
   try {
