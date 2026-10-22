@@ -1,5 +1,8 @@
 name: Receiving Bot Daily Teams Report
 on:
+  push:
+    paths:
+      - '.github/workflows/receiving-bot-daily.yml'
   schedule:
     # 08:00 Asia/Bangkok = 01:00 UTC; GitHub schedules may be delayed.
     - cron: '0 1 * * *'
