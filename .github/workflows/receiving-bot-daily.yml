@@ -1,8 +1,10 @@
 name: Receiving Bot Daily Teams Report
 on:
   schedule:
-    # 08:00 Asia/Bangkok = 01:00 UTC; GitHub schedules may be delayed.
+    # Primary: 08:00 Asia/Bangkok. Scheduled GitHub runs may be delayed or dropped.
     - cron: '0 1 * * *'
+    # Backup: 08:17 Asia/Bangkok; Supabase report_date+destination dedup prevents a second Teams card.
+    - cron: '17 1 * * *'
   workflow_dispatch:
 permissions:
   contents: read
