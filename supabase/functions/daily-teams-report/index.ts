@@ -97,7 +97,27 @@ Deno.serve(async req=>{
   if (req.method !== "POST") return new Response("Method not allowed",{status:405});
   const reportSecret = Deno.env.get("DAILY_REPORT_SECRET");
   if (!reportSecret) return new Response("Report secret not configured",{status:503});
-  if (!safeEqual(req.headers.get("x-report-secret")||"",reportSecret))
+  const validGitHubSecret = safeEqual(req.headers.get("x-report-secret")||"",reportSecret);
+  let validVaultCronToken = false;
+  if (!validGitHubSecret) {
+    const cronToken = req.headers.get("x-report-cron-token") || "";
+    // A separate 256-bit Vault token permits DB pg_cron without copying
+    // DAILY_REPORT_SECRET into cron commands or source control.
+    if (/^[a-f0-9]{64}$/.test(cronToken)) {
+      try {
+        const digestBytes = new Uint8Array(await crypto.subtle.digest(
+          "SHA-256",encoder.encode(cronToken)));
+        const digestHex = [...digestBytes].map(b => b.toString(16).padStart(2,"0")).join("");
+        const config = await db("receiving_cron_auth?select=token_hash&id=eq.1") as
+          Array<{token_hash:string}>;
+        validVaultCronToken = Boolean(config?.[0] &&
+          safeEqual(digestHex,config[0].token_hash));
+      } catch (_) {
+        console.error("Cron auth lookup failed");
+      }
+    }
+  }
+  if (!validGitHubSecret && !validVaultCronToken)
     return new Response("Unauthorized",{status:401});
   const day=bangkokYesterday();
   const destination="teams-personal-chat";
