@@ -1,8 +1,12 @@
 type Issue = {
   branch: string; product: string; unit: string; delta_qty: number;
+  ordered_qty: number; received_qty: number;
   variance_type: "SHORT" | "OVER"; status: string;
 };
-type QualityIssue = { branch: string | null; product: string | null };
+type QualityIssue = {
+  branch: string | null; product: string | null;
+  quantity_text: string | null; weight_text: string | null; defect: string | null;
+};
 // Stable LINE group ID of "รายงานปัญหาต่างจังหวัด (ตจว.)".
 const UPcountry_QUALITY_GROUP_ID = "C5bc53ddf83debcc8471bfeef0b7caf29";
 const encoder = new TextEncoder();
@@ -46,7 +50,7 @@ async function loadIssues(start:string,end:string): Promise<Issue[]> {
   const all: Issue[] = [];
   for (let offset=0; offset<=10000; offset+=1000) {
     const params = new URLSearchParams({
-      select:"branch,product,unit,delta_qty,variance_type,status",
+      select:"branch,product,unit,ordered_qty,received_qty,delta_qty,variance_type,status",
       message_at:"gte."+start, and:"(message_at.lt."+end+",is_void.eq.false)",
       order:"branch.asc", limit:"1000", offset:String(offset),
     });
@@ -60,7 +64,7 @@ async function loadQualityIssues(start:string,end:string): Promise<QualityIssue[
   const all: QualityIssue[] = [];
   for (let offset=0; offset<=10000; offset+=1000) {
     const params = new URLSearchParams({
-      select:"branch,product",
+      select:"branch,product,quantity_text,weight_text,defect",
       group_id:"eq."+UPcountry_QUALITY_GROUP_ID,
       message_at:"gte."+start,
       and:"(message_at.lt."+end+",is_void.eq.false)",
@@ -99,17 +103,15 @@ function card(date:string, issues:Issue[], quality:QualityIssue[]) {
   for (const [branch, values] of [...byBranch.entries()].sort((a,b)=>a[0].localeCompare(b[0],"th"))) {
     const shortage=values.filter(v=>v.variance_type==="SHORT");
     const over=values.filter(v=>v.variance_type==="OVER");
-    const kgShort=shortage.filter(x=>x.unit==="kg").reduce((s,x)=>s+Math.abs(x.delta_qty),0);
-    const kgOver=over.filter(x=>x.unit==="kg").reduce((s,x)=>s+x.delta_qty,0);
     const weightShort=shortage.filter(v=>v.unit==="kg");
-    const top=values.slice(0,3).map(v=>v.product+" ("+
+    const details=values.map(v=>v.product+": สั่ง "+v.ordered_qty+" "+v.unit+
+      ", รับ "+v.received_qty+" "+v.unit+" | "+
       (v.variance_type==="SHORT" ? (v.unit==="kg" ? "น้ำหนักชั่งขาด " : "รับขาด ") :
-       "รับเกินเกณฑ์ 3% ")+Math.abs(v.delta_qty)+" "+v.unit+")").join(", ");
+       "รับเกินเกณฑ์ 3% ")+Math.abs(v.delta_qty)+" "+v.unit).join("\n");
     const info="รับขาด "+shortage.length+" รายการ (น้ำหนักชั่งขาด "+weightShort.length+
-      " รายการ, "+kgShort.toFixed(3)+" กก.) | รับเกินเกณฑ์ 3% "+over.length+
-      " รายการ ("+kgOver.toFixed(3)+" กก.)";
-    const text=branch+": "+info+"\nสินค้าที่พบ: "+top+(values.length>3?" และอีก "+(values.length-3)+" รายการ":"")+
-      "\nข้อเสนอแนะ: ตรวจสอบใบหยิบ/ใบส่งของและหลักฐานรับสินค้า; สาเหตุรอตรวจสอบ";
+      " รายการ) | รับเกินเกณฑ์ 3% "+over.length+" รายการ";
+    const text=branch+": "+info+"\n"+details+
+      "\nสาเหตุ: รอตรวจสอบใบหยิบ/ใบส่งของและหลักฐานรับสินค้า";
     if (JSON.stringify(blocks).length+text.length > 22000) break;
     blocks.push({type:"TextBlock", text, wrap:true, separator:true});
     included++;
@@ -123,9 +125,12 @@ function card(date:string, issues:Issue[], quality:QualityIssue[]) {
   let qualityIncluded=0;
   for (const [branch,values] of [...qualityByBranch.entries()].sort((a,b)=>
     a[0].localeCompare(b[0],"th"))) {
-    const products=[...new Set(values.map(v=>v.product?.trim()).filter(Boolean))].slice(0,3);
-    const detail=branch+": "+values.length+" รายการ"+
-      (products.length?" | สินค้า: "+products.join(", "):"");
+    const details=values.map(v=>(v.product?.trim()||"ไม่ระบุสินค้า")+
+      " | จำนวน "+(v.quantity_text?.trim()||"ไม่ระบุ")+
+      (v.weight_text?.trim()?" | น้ำหนัก "+v.weight_text.trim():"")+
+      "\nปัญหาที่แจ้ง: "+(v.defect?.trim()||"ไม่ระบุ")+
+      "\nสาเหตุ: รอตรวจสอบ").join("\n");
+    const detail=branch+": "+values.length+" รายการ\n"+details;
     if (JSON.stringify(blocks).length+detail.length > 22000) break;
     blocks.push({type:"TextBlock",text:detail,wrap:true,separator:true});
     qualityIncluded++;
@@ -170,7 +175,30 @@ Deno.serve(async req=>{
   // report's idempotency record and is restricted to one request per local day.
   const requestBody = await req.json().catch(() => ({})) as {
     test_send_once?:boolean; test_real_date?:string; test_combined_date?:string;
+    preview_date?:string;
   };
+  // Authenticated read-only preview. No Teams call or dispatch claim.
+  if (requestBody?.preview_date !== undefined) {
+    const date=requestBody.preview_date;
+    if (typeof date!=="string" || !/^\d{4}-\d{2}-\d{2}$/.test(date))
+      return Response.json({status:"INVALID_PREVIEW_DATE"},{status:400});
+    const midnight=Date.parse(date+"T00:00:00.000Z");
+    if (!Number.isFinite(midnight) ||
+        new Date(midnight).toISOString().slice(0,10)!==date)
+      return Response.json({status:"INVALID_PREVIEW_DATE"},{status:400});
+    try {
+      const start=new Date(midnight-7*3600000).toISOString();
+      const end=new Date(midnight+17*3600000).toISOString();
+      const [receiving,quality]=await Promise.all([
+        loadIssues(start,end),loadQualityIssues(start,end),
+      ]);
+      return Response.json({status:"PREVIEW_ONLY",date,
+        receiving_count:receiving.length,quality_count:quality.length,
+        card:card(date,receiving,quality)});
+    } catch (_) {
+      return Response.json({status:"PREVIEW_FAILED",date},{status:500});
+    }
+  }
   if (requestBody?.test_send_once === true) {
     const yesterday=bangkokYesterday();
     const testDate=new Date(Date.parse(yesterday.date+"T00:00:00Z")+86400000)
