@@ -107,11 +107,11 @@ function card(date:string, issues:Issue[], quality:QualityIssue[]) {
     const details=values.map(v=>v.product+": สั่ง "+v.ordered_qty+" "+v.unit+
       ", รับ "+v.received_qty+" "+v.unit+" | "+
       (v.variance_type==="SHORT" ? (v.unit==="kg" ? "น้ำหนักชั่งขาด " : "รับขาด ") :
-       "รับเกินเกณฑ์ 3% ")+Math.abs(v.delta_qty)+" "+v.unit).join("\n");
+       "รับเกินเกณฑ์ 3% ")+Math.abs(v.delta_qty)+" "+v.unit+
+      "\nสาเหตุ: รอตรวจสอบใบหยิบ/ใบส่งของและหลักฐานรับสินค้า").join("\n");
     const info="รับขาด "+shortage.length+" รายการ (น้ำหนักชั่งขาด "+weightShort.length+
       " รายการ) | รับเกินเกณฑ์ 3% "+over.length+" รายการ";
-    const text=branch+": "+info+"\n"+details+
-      "\nสาเหตุ: รอตรวจสอบใบหยิบ/ใบส่งของและหลักฐานรับสินค้า";
+    const text=branch+": "+info+"\n"+details;
     if (JSON.stringify(blocks).length+text.length > 22000) break;
     blocks.push({type:"TextBlock", text, wrap:true, separator:true});
     included++;
