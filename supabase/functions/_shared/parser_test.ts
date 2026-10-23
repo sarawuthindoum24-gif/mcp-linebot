@@ -1,31 +1,46 @@
 import { parseReceivingMessage } from "./parser.ts";
-const epoch = Date.parse("2026-09-21T04:00:00Z");
-Deno.test("both 5kg examples are not stored", () => {
-  const r = parseReceivingMessage(
-    "สาขา จตุจักรชลบุรีขออนุญาตแจ้งปัญหาการรับสินค้า ขาดเกิน\nวันที่ 21/9/69\n- ปลาหมึกกรอบ ยอดสั่ง 25 กก.ได้รับจริง 30 กก.ส่วนต่าง 5 กก.\n- ปลาหมึกสด ยอดสั่ง 30 กก.ได้รับจริง 25 กก.ส่วนต่าง 5 กก.",
-    epoch,
-  );
-  if (r.branch !== "จตุจักรชลบุรี" || r.issue_date !== "2026-09-21" || r.items.length !== 0 || r.unparsed_lines !== 0) {
-    throw new Error(JSON.stringify(r));
-  }
+const epoch = Date.parse("2026-10-21T04:00:00Z");
+
+function parse(lines: string[]) {
+  return parseReceivingMessage(["สาขา จตุจักรชลบุรีแจ้งปัญหาการรับสินค้า",
+    "วันที่ 21/10/69", ...lines].join("\n"), epoch);
+}
+
+Deno.test("every shortage is retained, including 0.001 kg", () => {
+  const result = parse([
+    "- หมู ยอดสั่ง 20 กก. ได้รับจริง 19.999 กก.",
+    "- ผัก ยอดสั่ง 12 ชิ้น ได้รับจริง 11 ชิ้น",
+    "- ไก่ ยอดสั่ง 1 ถุง ไม่ได้รับสินค้า",
+  ]);
+  if (result.branch !== "จตุจักรชลบุรี" ||
+      result.issue_date !== "2026-10-21" ||
+      result.items.length !== 3 ||
+      result.items.some(item => item.variance_type !== "SHORT") ||
+      result.items[0].delta_qty !== -0.001 ||
+      result.items[2].received_qty !== 0) throw new Error(JSON.stringify(result));
 });
-Deno.test("more than 5kg is kept and sign correct", () => {
-  const r = parseReceivingMessage(
-    "สาขา ลาดพร้าวแจ้งปัญหา\n- หมู ยอดสั่ง 20 กก.ได้รับจริง 26 กก.\n- ไก่ ยอดสั่ง 30 กก.ได้รับจริง 23 กก.",
-    epoch,
-  );
-  if (r.items.length !== 2 || r.items[0].delta_qty !== 6 || r.items[0].variance_type !== "OVER" ||
-      r.items[1].delta_qty !== -7 || r.items[1].variance_type !== "SHORT") throw new Error(JSON.stringify(r));
+
+Deno.test("overage at 3 percent is allowed and above it is retained", () => {
+  const result = parse([
+    "- กุ้ง ยอดสั่ง 100 กก. ได้รับจริง 103 กก.",
+    "- ปลา ยอดสั่ง 100 กก. ได้รับจริง 103.001 กก.",
+    "- ตะกร้า ยอดสั่ง 100 ชิ้น ได้รับจริง 104 ชิ้น",
+  ]);
+  if (result.items.length !== 2 ||
+      result.items[0].delta_qty !== 3.001 ||
+      result.items[1].delta_qty !== 4 ||
+      result.items.some(item => item.variance_type !== "OVER"))
+    throw new Error(JSON.stringify(result));
 });
-Deno.test("6000 grams discrepancy is retained as 6 kilograms", () => {
-  const r = parseReceivingMessage("สาขา A แจ้งปัญหา\n- สินค้า ยอดสั่ง 1000 กรัม ได้รับจริง 7000 กรัม", epoch);
-  if (r.items.length !== 1 || r.items[0].unit !== "kg" || r.items[0].delta_qty !== 6) throw new Error(JSON.stringify(r));
+
+Deno.test("grams normalize to kilograms while preserving a small shortage", () => {
+  const result = parse(["- เนื้อ ยอดสั่ง 1000 กรัม ได้รับจริง 999 กรัม"]);
+  if (result.items.length !== 1 || result.items[0].unit !== "kg" ||
+      result.items[0].delta_qty !== -0.001) throw new Error(JSON.stringify(result));
 });
-Deno.test("counts do not use the 5kg exclusion", () => {
-  const r = parseReceivingMessage("สาขา A แจ้งปัญหา\n- ตะกร้า ยอดสั่ง 12 ชิ้น ได้รับจริง 10 ชิ้น", epoch);
-  if (r.items.length !== 1 || r.items[0].delta_qty !== -2) throw new Error(JSON.stringify(r));
-});
-Deno.test("unclear lines are review-only, without invented quantities", () => {
-  const r = parseReceivingMessage("สาขา A แจ้งปัญหา\n- หมู ยอดสั่ง 25 ได้รับจริง 30", epoch);
-  if (r.items.length !== 0 || r.unparsed_lines !== 1) throw new Error(JSON.stringify(r));
+
+Deno.test("unclear units go to review without inventing quantities", () => {
+  const result = parse(["- หมู ยอดสั่ง 25 ได้รับจริง 20"]);
+  if (result.items.length !== 0 || result.unparsed_lines !== 1)
+    throw new Error(JSON.stringify(result));
 });
