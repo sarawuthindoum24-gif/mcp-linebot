@@ -25,10 +25,18 @@ function clean(value: unknown, max = 160): string | null {
   return result || null;
 }
 
-function causeFromRaw(value: unknown): string | null {
+function labeledText(value: unknown, label: RegExp): string | null {
   if (typeof value !== "string") return null;
-  const match = value.match(/(?:^|\n)\s*(?:\d+[.)]?\s*)?สาเหตุ\s*[:：-]\s*([^\n]+)/i);
-  return match ? clean(match[1], 180) : null;
+  const lines = value.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index++) {
+    const match = lines[index].match(label);
+    if (!match) continue;
+    const inline = clean(match[1], 180);
+    if (inline) return inline;
+    const next = clean(lines[index + 1], 180);
+    if (next && !/^\d+[.)]/.test(next)) return next;
+  }
+  return null;
 }
 
 async function readRows(table: string, params: Record<string, string>): Promise<{ rows: DbRow[]; truncated: boolean }> {
@@ -82,7 +90,8 @@ Deno.serve(async (request) => {
       ...quality.rows.map((row) => ({
         type: "QUALITY", at: row.message_at, branch: clean(row.branch), product: clean(row.product),
         variance: null, ordered: null, received: null, difference: null, unit: null,
-        issue: clean(row.defect, 220), cause: causeFromRaw(row.raw_text),
+        issue: clean(row.defect, 220) || labeledText(row.raw_text, /(?:ข้อบกพร่อง(?:หรือปัญหา)?|ปัญหา)\s*[:：-]\s*(.*)$/i),
+        cause: labeledText(row.raw_text, /สาเหตุ\s*[:：-]\s*(.*)$/i),
         resolution: clean(row.resolution, 220), status: clean(row.status, 60),
         quantity: clean(row.quantity_text, 80), weight: clean(row.weight_text, 80),
       })),
