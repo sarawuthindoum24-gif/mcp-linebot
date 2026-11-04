@@ -115,9 +115,36 @@ test("real group route, quantity rule, retry, and unsend are idempotent", async 
   assert.equal(registry.get(groupId).route,"RECEIVING");
   assert.equal(messages.get("synthetic-message-1").route,"RECEIVING");
   assert.deepEqual([...issues.values()].map(x=>x.delta_qty),[3.001,-10,1,-3.001]);
+  assert.equal([...issues.values()][1].variance_type,"NOT_RECEIVED");
   assert.equal((await signedRequest([event])).status,200);
   assert.equal(issues.size,4);
   assert.equal((await signedRequest([{type:"unsend",source:event.source,
     unsend:{messageId:event.message.id}}])).status,200);
   assert.ok([...issues.values()].every(x=>x.is_void===true && x.voided_at));
+});
+
+test("freeform shortage is held for review instead of silently disappearing", async () => {
+  const groupId="synthetic-receiving-group";
+  const event={type:"message",timestamp:Date.parse("2026-11-04T03:00:00Z"),
+    source:{type:"group",groupId},message:{type:"text",id:"synthetic-freeform",
+      text:"สาขา ทดสอบ ได้รับสินค้าไม่ครบ หมู 3 ถุง ขออนุญาตโอนคืน"}};
+  assert.equal((await signedRequest([event])).status,200);
+  assert.ok(reviews.has("synthetic-freeform"));
+  assert.equal([...issues.values()].filter(x=>x.line_message_id==="synthetic-freeform").length,0);
+});
+
+test("multiline incomplete receipt keeps stated quantity and unknown totals", async () => {
+  const event={type:"message",timestamp:Date.parse("2026-11-04T13:22:23Z"),
+    source:{type:"group",groupId:"synthetic-receiving-group"},
+    message:{type:"text",id:"synthetic-incomplete-15",
+      text:["สาขา ตัวอย่าง หาดใหญ่","ขออนุญาตโอนคืนสินค้า",
+        "- น้ำจิ้ม 15 ถุง","เนื่องจากหน้าสาขาได้รับสินค้าไม่ครบค่ะ"].join("\n")}};
+  assert.equal((await signedRequest([event])).status,200);
+  const row=[...issues.values()].find(x=>x.line_message_id==="synthetic-incomplete-15");
+  assert.equal(row?.variance_type,"INCOMPLETE_RECEIPT");
+  assert.equal(row?.reported_missing_qty,15);
+  assert.equal(row?.ordered_qty,null);
+  assert.equal(row?.received_qty,null);
+  assert.equal(row?.delta_qty,null);
+  assert.equal(reviews.get("synthetic-incomplete-15")?.reason,"REPORTED_ONLY_QUANTITY");
 });

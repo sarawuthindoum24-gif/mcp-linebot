@@ -22,7 +22,16 @@ test("scheduled report uploads one flat file and sends its link once", async () 
     }
     if (target.includes("receiving_report_dispatches?select=status")) return Response.json([{ status: "SENT" }]);
     if (target.includes("receiving_report_dispatches?report_date=")) return Response.json([]);
-    if (target.includes("/rest/v1/receiving_issues?")) return Response.json([]);
+    if (target.includes("/rest/v1/receiving_issues?")) return Response.json([{
+      id: "r1", line_message_id: "receiving-1", message_at: new Date().toISOString(),
+      issue_date: new Date().toISOString().slice(0, 10),
+      branch: "สาขา ทดสอบ", product: "สินค้าตัวอย่าง", unit: "ถุง",
+      variance_type: "INCOMPLETE_RECEIPT", ordered_qty: null, received_qty: null,
+      delta_qty: null, reported_missing_qty: 15, reported_action: "ขออนุญาตโอนคืนสินค้า",
+      status: "PENDING_REVIEW",
+    }]);
+    if (target.includes("/rest/v1/line_group_messages?")) return Response.json([{line_message_id:"diagnostic"}]);
+    if (target.includes("/rest/v1/receiving_parse_review?")) return Response.json([{line_message_id:"review-1"}]);
     if (target.includes("/rest/v1/line_quality_issues?")) return Response.json([{
       line_message_id: "q1", message_at: new Date().toISOString(), branch: "สาขา ทดสอบ",
       product: "สินค้า", quantity_text: "2 กล่อง", weight_text: null, defect: "ชำรุด",
@@ -52,10 +61,17 @@ test("scheduled report uploads one flat file and sends its link once", async () 
     assert.equal(first.status, 200);
     assert.match(uploadedCsv, /^\uFEFFวันที่รายงาน,/);
     assert.match(uploadedCsv, /Quality,สาขา ทดสอบ,สินค้า,Quality,,,,2,กล่อง/);
+    assert.match(uploadedCsv, /Receiving,สาขา ทดสอบ,สินค้าตัวอย่าง,ได้รับไม่ครบ/);
+    assert.match(uploadedCsv, /15,ถุง/);
     const action = sentCards[0].attachments[0].content.actions?.[0];
     assert.equal(action?.type, "Action.OpenUrl");
     assert.match(action?.url || "", /\/storage\/v1\/object\/sign\/whservice-daily-reports\//);
     assert.equal(teamsCalls, 1);
+    const cardText = sentCards[0].attachments[0].content.body.map(x=>x.text||"").join("\n");
+    assert.match(cardText,/Receiving \| ขาด–เกิน–ไม่ได้รับ–ได้รับไม่ครบ: 1 รายการ จาก 1 สาขา/);
+    assert.match(cardText,/ได้รับไม่ครบตามที่แจ้ง 15 ถุง/);
+    assert.match(cardText,/1 ข้อความต้องตรวจทาน/);
+    assert.match(cardText,/Receiving/);
     const second = await handler(request());
     assert.equal((await second.json()).status, "ALREADY_SENT");
     assert.equal(teamsCalls, 1);

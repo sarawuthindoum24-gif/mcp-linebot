@@ -3,9 +3,9 @@ import type { DailyReceivingIssue, DailyQualityIssue } from "../_shared/daily-ex
 import { saveDailyFile } from "../_shared/daily-storage.ts";
 
 type Issue = DailyReceivingIssue & {
-  branch: string; product: string; unit: string; delta_qty: number;
-  ordered_qty: number; received_qty: number;
-  variance_type: "SHORT" | "OVER"; status: string;
+  branch: string; product: string; unit: string;
+  variance_type: "SHORT" | "OVER" | "NOT_RECEIVED" | "INCOMPLETE_RECEIPT";
+  status: string;
 };
 type QualityIssue = DailyQualityIssue & {
   branch: string | null; product: string | null;
@@ -54,7 +54,7 @@ async function loadIssues(start:string,end:string): Promise<Issue[]> {
   const all: Issue[] = [];
   for (let offset=0; offset<=10000; offset+=1000) {
     const params = new URLSearchParams({
-      select:"id,line_message_id,line_item_index,message_at,branch,product,unit,ordered_qty,received_qty,delta_qty,variance_type,status",
+      select:"id,line_message_id,line_item_index,message_at,branch,product,unit,ordered_qty,received_qty,delta_qty,reported_missing_qty,reported_action,variance_type,status",
       message_at:"gte."+start, and:"(message_at.lt."+end+",is_void.eq.false)",
       order:"message_at.asc,id.asc", limit:"1000", offset:String(offset),
     });
@@ -81,7 +81,25 @@ async function loadQualityIssues(start:string,end:string): Promise<QualityIssue[
   }
   throw new Error("QUALITY_REPORT_TOO_LARGE_REQUIRE_PAGINATION");
 }
-function card(date:string, issues:Issue[], quality:QualityIssue[], downloadUrl?:string) {
+type ReceivingSignal = { intakeConfirmed:boolean; reviewCount:number };
+async function loadReceivingSignal(start:string,end:string): Promise<ReceivingSignal> {
+  const messageParams=new URLSearchParams({
+    select:"line_message_id",route:"eq.RECEIVING",message_at:"lt."+end,
+    is_void:"eq.false",limit:"1",
+  });
+  const reviewParams=new URLSearchParams({
+    select:"line_message_id",message_at:"gte."+start,
+    and:"(message_at.lt."+end+")",limit:"1001",
+  });
+  const [messages,reviews]=await Promise.all([
+    db("line_group_messages?"+messageParams.toString()) as Promise<Array<unknown>>,
+    db("receiving_parse_review?"+reviewParams.toString()) as Promise<Array<unknown>>,
+  ]);
+  if (reviews.length>1000) throw new Error("RECEIVING_REVIEW_TOO_LARGE");
+  return {intakeConfirmed:messages.length>0,reviewCount:reviews.length};
+}
+function card(date:string, issues:Issue[], quality:QualityIssue[], downloadUrl?:string,
+    signal?:ReceivingSignal) {
   const byBranch = new Map<string,Issue[]>();
   for (const item of issues) byBranch.set(item.branch,[...(byBranch.get(item.branch)||[]),item]);
   const qualityByBranch = new Map<string,QualityIssue[]>();
@@ -96,26 +114,37 @@ function card(date:string, issues:Issue[], quality:QualityIssue[], downloadUrl?:
     type:"TextBlock", text:"ข้อมูลตามเวลารับข้อความ 00:00–23:59 น. (เวลาไทย)",
     wrap:true, isSubtle:true,
   },{
-    type:"TextBlock", text:"Receiving | รับขาด–รับเกิน: "+issues.length+
+    type:"TextBlock", text:"Receiving | ขาด–เกิน–ไม่ได้รับ–ได้รับไม่ครบ: "+issues.length+
       " รายการ จาก "+byBranch.size+" สาขา",
     weight:"Bolder", wrap:true,
   },{
-    type:"TextBlock", text:"สินค้าชั่ง: รับขาด–เกินเมื่อส่วนต่างมากกว่า 3 กก. | สินค้านับ: ขาด–เกินทุกจำนวน",
+    type:"TextBlock", text:"สินค้าชั่ง: รับขาด–เกินเมื่อส่วนต่างมากกว่า 3 กก. | สินค้านับและไม่ได้รับสินค้า: ทุกจำนวน",
     wrap:true, isSubtle:true,
   }];
   let included = 0;
   for (const [branch, values] of [...byBranch.entries()].sort((a,b)=>a[0].localeCompare(b[0],"th"))) {
-    const shortage=values.filter(v=>v.variance_type==="SHORT");
+    const shortage=values.filter(v=>["SHORT","NOT_RECEIVED","INCOMPLETE_RECEIPT"].includes(v.variance_type));
     const over=values.filter(v=>v.variance_type==="OVER");
-    const weightShort=shortage.filter(v=>v.unit==="kg");
+    const weightShort=shortage.filter(v=>v.unit==="kg" && v.variance_type==="SHORT");
+    const notReceived=shortage.filter(v=>v.variance_type==="NOT_RECEIVED");
+    const incomplete=shortage.filter(v=>v.variance_type==="INCOMPLETE_RECEIPT");
     const weightOver=over.filter(v=>v.unit==="kg");
-    const details=values.map(v=>v.product+": สั่ง "+v.ordered_qty+" "+v.unit+
-      ", รับ "+v.received_qty+" "+v.unit+" | "+
-      (v.variance_type==="SHORT" ? (v.unit==="kg" ? "น้ำหนักชั่งขาด " : "รับขาด ") :
-       (v.unit==="kg" ? "น้ำหนักชั่งเกิน " : "รับเกิน "))+Math.abs(v.delta_qty)+" "+v.unit+
-      "\nสาเหตุ: รอตรวจสอบใบหยิบ/ใบส่งของและหลักฐานรับสินค้า").join("\n");
-    const info="รับขาด "+shortage.length+" รายการ (น้ำหนักชั่งขาด "+weightShort.length+
-      " รายการ) | รับเกิน "+over.length+" รายการ (น้ำหนักชั่งเกิน "+weightOver.length+" รายการ)";
+    const details=values.map(v=>v.product+": สั่ง "+(v.ordered_qty ?? "ไม่ระบุ")+
+      (v.ordered_qty===null ? "" : " "+v.unit)+
+      ", รับ "+(v.received_qty ?? "ไม่ระบุ")+
+      (v.received_qty===null ? "" : " "+v.unit)+" | "+
+      (v.variance_type==="INCOMPLETE_RECEIPT" ? "ได้รับไม่ครบตามที่แจ้ง " :
+       v.variance_type==="NOT_RECEIVED" ? "ไม่ได้รับสินค้า " :
+       v.variance_type==="SHORT" ? (v.unit==="kg" ? "น้ำหนักชั่งขาด " : "รับขาด ") :
+       (v.unit==="kg" ? "น้ำหนักชั่งเกิน " : "รับเกิน "))+
+      (v.delta_qty===null ? (v.reported_missing_qty ?? "ไม่ระบุ") : Math.abs(v.delta_qty))+
+      " "+v.unit+
+      "\nสาเหตุ: รอตรวจสอบใบหยิบ/ใบส่งของและหลักฐานรับสินค้า"+
+      (v.reported_action ? "\nการดำเนินการที่แจ้ง: "+v.reported_action : "")).join("\n");
+    const info="รับขาด/ไม่ได้รับ "+shortage.length+" รายการ (น้ำหนักชั่งขาด "+weightShort.length+
+      " รายการ, ไม่ได้รับสินค้า "+notReceived.length+" รายการ, ได้รับไม่ครบ "+
+      incomplete.length+" รายการ) | รับเกิน "+over.length+
+      " รายการ (น้ำหนักชั่งเกิน "+weightOver.length+" รายการ)";
     const text=branch+": "+info+"\n"+details;
     if (JSON.stringify(blocks).length+text.length > 22000) break;
     blocks.push({type:"TextBlock", text, wrap:true, separator:true});
@@ -123,7 +152,13 @@ function card(date:string, issues:Issue[], quality:QualityIssue[], downloadUrl?:
   }
   if (included < byBranch.size) blocks.push({type:"TextBlock",text:"รายชื่อสาขาบางส่วนถูกย่อเพื่อจำกัดขนาดข้อความ โปรดดูฐานข้อมูล Supabase เพื่อดูข้อมูลทั้งหมด",wrap:true});
   if (!issues.length) blocks.push({type:"TextBlock",
-    text:"ยังไม่ยืนยันการรับข้อความจาก LINE กลุ่มนี้ จึงยังสรุปไม่ได้ว่าไม่มีปัญหารับขาด–รับเกิน",
+    text:signal?.intakeConfirmed ?
+      "รับข้อความจาก LINE กลุ่มนี้แล้ว แต่ยังไม่มีรายการที่แยกเป็นปัญหาได้ในวันรายงาน" :
+      "ยังไม่ยืนยันการรับข้อความจาก LINE กลุ่มนี้ จึงยังสรุปไม่ได้ว่าไม่มีปัญหารับขาด–รับเกิน",
+    wrap:true});
+  if (signal?.reviewCount) blocks.push({type:"TextBlock",
+    text:"Receiving: "+signal.reviewCount+
+      " ข้อความต้องตรวจทานก่อนสรุปรายการและจำนวน โปรดดูคิวตรวจทานในฐานข้อมูล",
     wrap:true});
   blocks.push({type:"TextBlock",text:"Quality | กลุ่มต่างจังหวัด: "+quality.length+
     " รายการ จาก "+qualityByBranch.size+" สาขา",weight:"Bolder",wrap:true,separator:true});
@@ -197,12 +232,13 @@ Deno.serve(async req=>{
     try {
       const start=new Date(midnight-7*3600000).toISOString();
       const end=new Date(midnight+17*3600000).toISOString();
-      const [receiving,quality]=await Promise.all([
-        loadIssues(start,end),loadQualityIssues(start,end),
+      const [receiving,quality,signal]=await Promise.all([
+        loadIssues(start,end),loadQualityIssues(start,end),loadReceivingSignal(start,end),
       ]);
       return Response.json({status:"PREVIEW_ONLY",date,
         receiving_count:receiving.length,quality_count:quality.length,
-        card:card(date,receiving,quality)});
+        review_count:signal.reviewCount,intake_confirmed:signal.intakeConfirmed,
+        card:card(date,receiving,quality,undefined,signal)});
     } catch (_) {
       return Response.json({status:"PREVIEW_FAILED",date},{status:500});
     }
@@ -460,8 +496,9 @@ Deno.serve(async req=>{
         previousStatus:previous?.[0]?.status||"UNKNOWN"},{status:409});
     }
     try {
-      const [issues,quality]=await Promise.all([
+      const [issues,quality,signal]=await Promise.all([
         loadIssues(day.start,day.end),loadQualityIssues(day.start,day.end),
+        loadReceivingSignal(day.start,day.end),
       ]);
       const csv=buildDailyCsv(day.date,issues,quality);
       const downloadUrl=await saveDailyFile(env("SUPABASE_URL"),
@@ -469,7 +506,7 @@ Deno.serve(async req=>{
       // Webhook must be created from a Microsoft Teams Workflows CHAT template, scoped to the requested 1:1 recipient.
       const response=await fetch(env("TEAMS_WEBHOOK_URL"),{
         method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify(card(day.date,issues,quality,downloadUrl)),
+        body:JSON.stringify(card(day.date,issues,quality,downloadUrl,signal)),
       });
       if (!response.ok) throw new Error("TEAMS_HTTP_"+response.status);
       await db("receiving_report_dispatches?report_date=eq."+day.date+"&destination=eq."+destination,

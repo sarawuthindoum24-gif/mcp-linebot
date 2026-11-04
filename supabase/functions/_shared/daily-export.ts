@@ -1,8 +1,10 @@
 export type DailyReceivingIssue = {
   id: string; line_message_id: string; line_item_index: number;
   message_at: string; branch: string; product: string; unit: string;
-  ordered_qty: number; received_qty: number; delta_qty: number;
-  variance_type: "SHORT" | "OVER"; status: string;
+  ordered_qty: number | null; received_qty: number | null; delta_qty: number | null;
+  reported_missing_qty?: number | null; reported_action?: string | null;
+  variance_type: "SHORT" | "OVER" | "NOT_RECEIVED" | "INCOMPLETE_RECEIPT";
+  status: string;
 };
 
 export type DailyQualityIssue = {
@@ -53,14 +55,19 @@ export function buildDailyCsv(
   const rows: Array<Array<string | number | null>> = [headings];
   for (const item of receiving) {
     const weighted = item.unit === "kg";
-    const category = item.variance_type === "SHORT"
+    const category = item.variance_type === "INCOMPLETE_RECEIPT" ? "ได้รับไม่ครบ" :
+      item.variance_type === "NOT_RECEIVED" ? "ไม่ได้รับสินค้า" :
+      item.variance_type === "SHORT"
       ? (weighted ? "น้ำหนักชั่งขาด" : "รับขาด")
       : (weighted ? "น้ำหนักชั่งเกิน" : "รับเกิน");
+    const stated=item.reported_missing_qty == null ? "" :
+      item.reported_missing_qty+" "+item.unit;
     rows.push([
       reportDate, localDate.format(new Date(item.message_at)),
       localTime.format(new Date(item.message_at)), "Receiving", item.branch,
       item.product, category, item.ordered_qty, item.received_qty, item.delta_qty,
-      Math.abs(item.delta_qty), item.unit, "", "", "", "ยังไม่ระบุสาเหตุ", "",
+      item.delta_qty === null ? (item.reported_missing_qty ?? null) : Math.abs(item.delta_qty),
+      item.unit, stated, "", "", "ยังไม่ระบุสาเหตุ", item.reported_action || "",
       item.status, "", "", item.id,
     ]);
   }

@@ -89,13 +89,27 @@ function syncReceivingIssues() {
     for (const issue of issues) {
       if (seen.has(issue.id)) throw new Error('Duplicate issue ID in export');
       seen.add(issue.id);
-      const delta = receivingNumber_(issue.delta_qty);
-      const ordered = receivingNumber_(issue.ordered_qty);
-      const received = receivingNumber_(issue.received_qty);
-      if (Math.abs((received - ordered) - delta) > 0.001)
-        throw new Error('Quantity mismatch in export');
+      const delta = issue.delta_qty == null ? null : receivingNumber_(issue.delta_qty);
+      const ordered = issue.ordered_qty == null ? null : receivingNumber_(issue.ordered_qty);
+      const received = issue.received_qty == null ? null : receivingNumber_(issue.received_qty);
+      const reported = issue.reported_missing_qty == null ? null :
+        receivingNumber_(issue.reported_missing_qty);
+      const notReceived = issue.variance_type === 'NOT_RECEIVED';
+      const incomplete = issue.variance_type === 'INCOMPLETE_RECEIPT';
+      if (delta === null) {
+        if (reported === null || reported <= 0 || ordered !== null ||
+            (incomplete ? received !== null : !notReceived || received !== 0))
+          throw new Error('Invalid reported-only quantity in export');
+      } else {
+        if (ordered === null || received === null ||
+            Math.abs((received - ordered) - delta) > 0.001)
+          throw new Error('Quantity mismatch in export');
+        if (notReceived && (ordered <= 0 || received !== 0 || delta >= 0))
+          throw new Error('Invalid not-received quantity in export');
+      }
       // Weighted goods must exceed +/- 3 kg; count units report any nonzero difference.
-      if (delta === 0 || (issue.unit === 'kg' &&
+      // Explicit non-receipt is reportable at every quantity.
+      if (delta === 0 || (delta !== null && !notReceived && issue.unit === 'kg' &&
           Math.abs(Math.round(delta * 1000)) <= 3000))
         throw new Error('Accepted variance unexpectedly included in receiving issues export');
       const date = receivingDate_(issue.message_at);
@@ -104,25 +118,33 @@ function syncReceivingIssues() {
         issue.id, issue.issue_date, receivingTimestamp_(issue.message_at),
         receivingText_(branch), receivingText_(issue.product),
         issue.unit === 'kg' ? 'สินค้าชั่ง' : 'สินค้านับ',
-        ordered, received, delta, Math.abs(delta), issue.unit,
-        issue.variance_type, delta < 0 ?
+        ordered ?? '', received ?? '', delta ?? '',
+        delta === null ? reported : Math.abs(delta), issue.unit,
+        issue.variance_type, incomplete ? 'ได้รับไม่ครบ' :
+          notReceived ? 'ไม่ได้รับสินค้า' : delta < 0 ?
           (issue.unit === 'kg' ? 'น้ำหนักชั่งขาด' : 'รับขาด') :
           (issue.unit === 'kg' ? 'น้ำหนักชั่งเกิน' : 'รับเกิน'),
-        issue.status, 'LINE OA @842nltit', receivingText_(issue.line_message_id), receivingText_(issue.group_id||''), '',
+        issue.status, 'LINE OA @842nltit', receivingText_(issue.line_message_id),
+        receivingText_(issue.group_id||''), receivingText_(
+          (delta === null ? 'จำนวนที่สาขาแจ้งขาด ' + reported + ' ' + issue.unit +
+            '; ยอดสั่ง/รับไม่ระบุ' : '') +
+          (issue.reported_action ? '; การดำเนินการ: ' + issue.reported_action : '')),
       ]);
       const key = date + '\u0000' + branch;
       if (!daily.has(key)) daily.set(key, {
-        date, branch, count: 0, short: 0, over: 0,
+        date, branch, count: 0, short: 0, over: 0, notReceived: 0, incomplete: 0,
         shortKg: 0, overKg: 0, other: 0, weightShortCount: 0,
         pending: 0, products: [],
       });
       const group = daily.get(key);
       group.count++;
-      if (delta < 0) group.short++; else group.over++;
-      if (issue.unit === 'kg') {
+      if (issue.variance_type === 'OVER') group.over++; else group.short++;
+      if (notReceived) group.notReceived++;
+      if (incomplete) group.incomplete++;
+      if (issue.unit === 'kg' && delta !== null) {
         if (delta < 0) {
           group.shortKg += Math.abs(delta);
-          group.weightShortCount++;
+          if (!notReceived) group.weightShortCount++;
         }
         else group.overKg += delta;
       } else group.other++;
@@ -134,6 +156,8 @@ function syncReceivingIssues() {
       .map(g => [g.date, receivingText_(g.branch), g.count, g.short, g.over,
         g.shortKg, g.overKg, g.other, g.pending,
         (g.weightShortCount ? 'น้ำหนักชั่งขาด ' + g.weightShortCount + ' รายการ | ' : '') +
+          (g.notReceived ? 'ไม่ได้รับสินค้า ' + g.notReceived + ' รายการ | ' : '') +
+          (g.incomplete ? 'ได้รับไม่ครบ ' + g.incomplete + ' รายการ | ' : '') +
           g.products.join(', '),
         'รอตรวจสอบ', 'ตรวจใบส่งของและหลักฐานรับสินค้า',
         dispatchByDate.get(g.date) || 'ยังไม่ส่ง']);

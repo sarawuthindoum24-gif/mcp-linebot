@@ -36,3 +36,25 @@ test("empty Receiving remains zero rows, and counted overage is included", () =>
   assert.match(csv, /รับเกิน,100,101,1,1,ชิ้น,/);
   assert.equal(buildDailyCsv("2026-11-03", [], []).slice(1).trimEnd().split("\r\n").length, 1);
 });
+
+test("one kilogram explicitly not received is its own category", () => {
+  const csv = buildDailyCsv("2026-11-03", [{
+    id:"r3",line_message_id:"line-r3",line_item_index:1,
+    message_at:"2026-11-03T02:00:00Z",branch:"สาขา ค",product:"พริก",
+    unit:"kg",ordered_qty:1,received_qty:0,delta_qty:-1,
+    variance_type:"NOT_RECEIVED",status:"PENDING_REVIEW",
+  }],[]);
+  assert.match(csv,/Receiving,สาขา ค,พริก,ไม่ได้รับสินค้า,1,0,-1,1,kg,/);
+});
+
+test("incomplete receipt exports reported quantity without fabricated totals", () => {
+  const csv=buildDailyCsv("2026-11-04",[{
+    id:"r4",line_message_id:"line-r4",line_item_index:3,
+    message_at:"2026-11-04T13:22:23Z",branch:"สาขา ค",product:"น้ำจิ้ม",
+    unit:"ถุง",ordered_qty:null,received_qty:null,delta_qty:null,
+    reported_missing_qty:15,reported_action:"ขออนุญาตโอนคืนสินค้า",
+    variance_type:"INCOMPLETE_RECEIPT",status:"PENDING_REVIEW",
+  }],[]);
+  assert.match(csv,/Receiving,สาขา ค,น้ำจิ้ม,ได้รับไม่ครบ,,,,15,ถุง,15 ถุง/);
+  assert.match(csv,/ขออนุญาตโอนคืนสินค้า,PENDING_REVIEW/);
+});

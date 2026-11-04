@@ -16,7 +16,8 @@ Deno.test("weighted differences within plus or minus 3 kg are accepted; count di
   if (result.branch !== "จตุจักรชลบุรี" ||
       result.issue_date !== "2026-10-21" ||
       result.items.length !== 2 ||
-      result.items.some(item => item.variance_type !== "SHORT") ||
+      result.items[0].variance_type !== "SHORT" ||
+      result.items[1].variance_type !== "NOT_RECEIVED" ||
       result.items[0].delta_qty !== -1 ||
       result.items[1].received_qty !== 0) throw new Error(JSON.stringify(result));
 });
@@ -44,4 +45,38 @@ Deno.test("unclear units go to review without inventing quantities", () => {
   const result = parse(["- หมู ยอดสั่ง 25 ได้รับจริง 20"]);
   if (result.items.length !== 0 || result.unparsed_lines !== 1)
     throw new Error(JSON.stringify(result));
+});
+
+Deno.test("explicitly not received weighted goods are reported even below 3 kg", () => {
+  const result = parse(["- พริก ยอดสั่ง 1 กก. ไม่ได้รับสินค้า",
+    "- ผัก ยอดสั่ง 2 กก. รับจริง 0 กก.",
+    "- เนื้อ ยอดสั่ง 3 กก. ไม่ได้รับเลย"]);
+  if (result.items.length !== 3 || result.items.some(x => x.variance_type !== "NOT_RECEIVED") ||
+      result.items[0].ordered_qty !== 1 || result.items[0].received_qty !== 0 ||
+      result.items[0].delta_qty !== -1) throw new Error(JSON.stringify(result));
+});
+
+Deno.test("unbulleted multi-product report uses issue date and keeps only weight differences above 3 kg", () => {
+  const raw=["สาขาพระราม 2 ขออนุญาตแจ้งปัญหาการรับสินค้า ขาด/เกิน",
+    "วันที่แจ้ง 03/11/69",
+    "สินค้า ก", "ยอดสั่ง 100 กก", "รับจริง 102 กก", "เกิน 2 กก",
+    "สินค้า ข", "ยอดสั่ง 130 กก", "รับจริง 134.70 กก", "เกิน 4.70 กก",
+    "สินค้า ค", "ยอดสั่ง 70 กก", "รับจริง 73.50 กก", "เกิน 3.50 กก"].join("\n");
+  const result=parseReceivingMessage(raw,Date.parse("2026-11-04T02:00:00Z"));
+  if (result.branch!=="พระราม 2" || result.issue_date!=="2026-11-03" ||
+      result.items.length!==2 || result.items[0].product!=="สินค้า ข" ||
+      result.items[0].delta_qty!==4.7 || result.items[1].delta_qty!==3.5)
+    throw new Error(JSON.stringify(result));
+});
+
+Deno.test("reported incomplete count is retained without inventing ordered or received totals", () => {
+  const raw=["สาขา ทดสอบ", "ขออนุญาตโอนคืนสินค้า", "",
+    "- สินค้าตัวอย่าง 15 ถุง", "", "เนื่องจากหน้าสาขาได้รับสินค้าไม่ครบค่ะ"].join("\n");
+  const result=parseReceivingMessage(raw,Date.parse("2026-11-04T13:22:23Z"));
+  const item=result.items[0];
+  if (result.items.length!==1 || item.variance_type!=="INCOMPLETE_RECEIPT" ||
+      item.branch!=="ทดสอบ" || item.product!=="สินค้าตัวอย่าง" ||
+      item.reported_missing_qty!==15 || item.unit!=="ถุง" ||
+      item.ordered_qty!==null || item.received_qty!==null || item.delta_qty!==null ||
+      item.reported_action!=="ขออนุญาตโอนคืนสินค้า") throw new Error(JSON.stringify(result));
 });
