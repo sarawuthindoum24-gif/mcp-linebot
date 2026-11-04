@@ -1,7 +1,18 @@
-type Issue = {
-  branch: string; product: string; unit: string; delta_qty: number;
-  variance_type: "SHORT" | "OVER"; status: string;
+import { buildDailyCsv, dailyCsvName } from "../_shared/daily-export.ts";
+import type { DailyReceivingIssue, DailyQualityIssue } from "../_shared/daily-export.ts";
+import { saveDailyFile } from "../_shared/daily-storage.ts";
+
+type Issue = DailyReceivingIssue & {
+  branch: string; product: string; unit: string;
+  variance_type: "SHORT" | "OVER" | "NOT_RECEIVED" | "INCOMPLETE_RECEIPT";
+  status: string;
 };
+type QualityIssue = DailyQualityIssue & {
+  branch: string | null; product: string | null;
+  quantity_text: string | null; weight_text: string | null; defect: string | null;
+};
+// Stable LINE group ID of "รายงานปัญหาต่างจังหวัด (ตจว.)".
+const UPcountry_QUALITY_GROUP_ID = "C5bc53ddf83debcc8471bfeef0b7caf29";
 const encoder = new TextEncoder();
 function env(key: string): string {
   const value = Deno.env.get(key);
@@ -43,9 +54,9 @@ async function loadIssues(start:string,end:string): Promise<Issue[]> {
   const all: Issue[] = [];
   for (let offset=0; offset<=10000; offset+=1000) {
     const params = new URLSearchParams({
-      select:"branch,product,unit,delta_qty,variance_type,status",
+      select:"id,line_message_id,line_item_index,message_at,branch,product,unit,ordered_qty,received_qty,delta_qty,reported_missing_qty,reported_action,variance_type,status",
       message_at:"gte."+start, and:"(message_at.lt."+end+",is_void.eq.false)",
-      order:"branch.asc", limit:"1000", offset:String(offset),
+      order:"message_at.asc,id.asc", limit:"1000", offset:String(offset),
     });
     const page = await db("receiving_issues?" + params.toString()) as Issue[];
     all.push(...page);
@@ -53,44 +64,127 @@ async function loadIssues(start:string,end:string): Promise<Issue[]> {
   }
   throw new Error("REPORT_TOO_LARGE_REQUIRE_PAGINATION");
 }
-function card(date:string, issues:Issue[]) {
+async function loadQualityIssues(start:string,end:string): Promise<QualityIssue[]> {
+  const all: QualityIssue[] = [];
+  for (let offset=0; offset<=10000; offset+=1000) {
+    const params = new URLSearchParams({
+      select:"line_message_id,message_at,branch,product,supplier,lot,quantity_text,weight_text,defect,resolution,status",
+      group_id:"eq."+UPcountry_QUALITY_GROUP_ID,
+      message_at:"gte."+start,
+      and:"(message_at.lt."+end+",is_void.eq.false)",
+      order:"message_at.asc,line_message_id.asc",
+      limit:"1000", offset:String(offset),
+    });
+    const page = await db("line_quality_issues?" + params.toString()) as QualityIssue[];
+    all.push(...page);
+    if (page.length < 1000) return all;
+  }
+  throw new Error("QUALITY_REPORT_TOO_LARGE_REQUIRE_PAGINATION");
+}
+type ReceivingSignal = { intakeConfirmed:boolean; reviewCount:number };
+async function loadReceivingSignal(start:string,end:string): Promise<ReceivingSignal> {
+  const messageParams=new URLSearchParams({
+    select:"line_message_id",route:"eq.RECEIVING",message_at:"lt."+end,
+    is_void:"eq.false",limit:"1",
+  });
+  const reviewParams=new URLSearchParams({
+    select:"line_message_id",message_at:"gte."+start,
+    and:"(message_at.lt."+end+")",limit:"1001",
+  });
+  const [messages,reviews]=await Promise.all([
+    db("line_group_messages?"+messageParams.toString()) as Promise<Array<unknown>>,
+    db("receiving_parse_review?"+reviewParams.toString()) as Promise<Array<unknown>>,
+  ]);
+  if (reviews.length>1000) throw new Error("RECEIVING_REVIEW_TOO_LARGE");
+  return {intakeConfirmed:messages.length>0,reviewCount:reviews.length};
+}
+function card(date:string, issues:Issue[], quality:QualityIssue[], downloadUrl?:string,
+    signal?:ReceivingSignal) {
   const byBranch = new Map<string,Issue[]>();
   for (const item of issues) byBranch.set(item.branch,[...(byBranch.get(item.branch)||[]),item]);
+  const qualityByBranch = new Map<string,QualityIssue[]>();
+  for (const item of quality) {
+    const branch=item.branch?.trim() || "ไม่ระบุสาขา";
+    qualityByBranch.set(branch,[...(qualityByBranch.get(branch)||[]),item]);
+  }
   const blocks:any[] = [{
-    type:"TextBlock", text:"รายงานปัญหาการรับสินค้า ประจำวันที่ "+date,
+    type:"TextBlock", text:"WHservice | รายงาน Receiving และ Quality ประจำวันที่ "+date,
     weight:"Bolder", size:"Medium", wrap:true,
   },{
-    type:"TextBlock", text:"เวลาไทย 00:00–23:59 | รับขาดทุกจำนวน / รับเกินมากกว่า 3% ของยอดสั่ง",
+    type:"TextBlock", text:"ข้อมูลตามเวลารับข้อความ 00:00–23:59 น. (เวลาไทย)",
     wrap:true, isSubtle:true,
   },{
-    type:"TextBlock", text:"รวม "+issues.length+" รายการ จาก "+byBranch.size+" สาขา",
+    type:"TextBlock", text:"Receiving | ขาด–เกิน–ไม่ได้รับ–ได้รับไม่ครบ: "+issues.length+
+      " รายการ จาก "+byBranch.size+" สาขา",
     weight:"Bolder", wrap:true,
+  },{
+    type:"TextBlock", text:"สินค้าชั่ง: รับขาด–เกินเมื่อส่วนต่างมากกว่า 3 กก. | สินค้านับและไม่ได้รับสินค้า: ทุกจำนวน",
+    wrap:true, isSubtle:true,
   }];
   let included = 0;
   for (const [branch, values] of [...byBranch.entries()].sort((a,b)=>a[0].localeCompare(b[0],"th"))) {
-    const shortage=values.filter(v=>v.variance_type==="SHORT");
+    const shortage=values.filter(v=>["SHORT","NOT_RECEIVED","INCOMPLETE_RECEIPT"].includes(v.variance_type));
     const over=values.filter(v=>v.variance_type==="OVER");
-    const kgShort=shortage.filter(x=>x.unit==="kg").reduce((s,x)=>s+Math.abs(x.delta_qty),0);
-    const kgOver=over.filter(x=>x.unit==="kg").reduce((s,x)=>s+x.delta_qty,0);
-    const weightShort=shortage.filter(v=>v.unit==="kg");
-    const top=values.slice(0,3).map(v=>v.product+" ("+
-      (v.variance_type==="SHORT" ? (v.unit==="kg" ? "น้ำหนักชั่งขาด " : "รับขาด ") :
-       "รับเกินเกณฑ์ 3% ")+Math.abs(v.delta_qty)+" "+v.unit+")").join(", ");
-    const info="รับขาด "+shortage.length+" รายการ (น้ำหนักชั่งขาด "+weightShort.length+
-      " รายการ, "+kgShort.toFixed(3)+" กก.) | รับเกินเกณฑ์ 3% "+over.length+
-      " รายการ ("+kgOver.toFixed(3)+" กก.)";
-    const text=branch+": "+info+"\nสินค้าที่พบ: "+top+(values.length>3?" และอีก "+(values.length-3)+" รายการ":"")+
-      "\nข้อเสนอแนะ: ตรวจสอบใบหยิบ/ใบส่งของและหลักฐานรับสินค้า; สาเหตุรอตรวจสอบ";
+    const weightShort=shortage.filter(v=>v.unit==="kg" && v.variance_type==="SHORT");
+    const notReceived=shortage.filter(v=>v.variance_type==="NOT_RECEIVED");
+    const incomplete=shortage.filter(v=>v.variance_type==="INCOMPLETE_RECEIPT");
+    const weightOver=over.filter(v=>v.unit==="kg");
+    const details=values.map(v=>v.product+": สั่ง "+(v.ordered_qty ?? "ไม่ระบุ")+
+      (v.ordered_qty===null ? "" : " "+v.unit)+
+      ", รับ "+(v.received_qty ?? "ไม่ระบุ")+
+      (v.received_qty===null ? "" : " "+v.unit)+" | "+
+      (v.variance_type==="INCOMPLETE_RECEIPT" ? "ได้รับไม่ครบตามที่แจ้ง " :
+       v.variance_type==="NOT_RECEIVED" ? "ไม่ได้รับสินค้า " :
+       v.variance_type==="SHORT" ? (v.unit==="kg" ? "น้ำหนักชั่งขาด " : "รับขาด ") :
+       (v.unit==="kg" ? "น้ำหนักชั่งเกิน " : "รับเกิน "))+
+      (v.delta_qty===null ? (v.reported_missing_qty ?? "ไม่ระบุ") : Math.abs(v.delta_qty))+
+      " "+v.unit+
+      "\nสาเหตุ: รอตรวจสอบใบหยิบ/ใบส่งของและหลักฐานรับสินค้า"+
+      (v.reported_action ? "\nการดำเนินการที่แจ้ง: "+v.reported_action : "")).join("\n");
+    const info="รับขาด/ไม่ได้รับ "+shortage.length+" รายการ (น้ำหนักชั่งขาด "+weightShort.length+
+      " รายการ, ไม่ได้รับสินค้า "+notReceived.length+" รายการ, ได้รับไม่ครบ "+
+      incomplete.length+" รายการ) | รับเกิน "+over.length+
+      " รายการ (น้ำหนักชั่งเกิน "+weightOver.length+" รายการ)";
+    const text=branch+": "+info+"\n"+details;
     if (JSON.stringify(blocks).length+text.length > 22000) break;
     blocks.push({type:"TextBlock", text, wrap:true, separator:true});
     included++;
   }
   if (included < byBranch.size) blocks.push({type:"TextBlock",text:"รายชื่อสาขาบางส่วนถูกย่อเพื่อจำกัดขนาดข้อความ โปรดดูฐานข้อมูล Supabase เพื่อดูข้อมูลทั้งหมด",wrap:true});
-  if (!issues.length) blocks.push({type:"TextBlock", text:"ไม่พบรายการปัญหาที่เข้าเกณฑ์ในฐานข้อมูลสำหรับวันนี้ (กรุณายืนยันว่า LINE กลุ่มส่งข้อมูลเข้าระบบก่อนสรุปว่าไม่มีปัญหา)",wrap:true});
+  if (!issues.length) blocks.push({type:"TextBlock",
+    text:signal?.intakeConfirmed ?
+      "รับข้อความจาก LINE กลุ่มนี้แล้ว แต่ยังไม่มีรายการที่แยกเป็นปัญหาได้ในวันรายงาน" :
+      "ยังไม่ยืนยันการรับข้อความจาก LINE กลุ่มนี้ จึงยังสรุปไม่ได้ว่าไม่มีปัญหารับขาด–รับเกิน",
+    wrap:true});
+  if (signal?.reviewCount) blocks.push({type:"TextBlock",
+    text:"Receiving: "+signal.reviewCount+
+      " ข้อความต้องตรวจทานก่อนสรุปรายการและจำนวน โปรดดูคิวตรวจทานในฐานข้อมูล",
+    wrap:true});
+  blocks.push({type:"TextBlock",text:"Quality | กลุ่มต่างจังหวัด: "+quality.length+
+    " รายการ จาก "+qualityByBranch.size+" สาขา",weight:"Bolder",wrap:true,separator:true});
+  let qualityIncluded=0;
+  for (const [branch,values] of [...qualityByBranch.entries()].sort((a,b)=>
+    a[0].localeCompare(b[0],"th"))) {
+    const details=values.map(v=>(v.product?.trim()||"ไม่ระบุสินค้า")+
+      " | จำนวน "+(v.quantity_text?.trim()||"ไม่ระบุ")+
+      (v.weight_text?.trim()?" | น้ำหนัก "+v.weight_text.trim():"")+
+      "\nปัญหาที่แจ้ง: "+(v.defect?.trim()||"ไม่ระบุ")+
+      "\nสาเหตุ: รอตรวจสอบ").join("\n");
+    const detail=branch+": "+values.length+" รายการ\n"+details;
+    if (JSON.stringify(blocks).length+detail.length > 22000) break;
+    blocks.push({type:"TextBlock",text:detail,wrap:true,separator:true});
+    qualityIncluded++;
+  }
+  if (qualityIncluded<qualityByBranch.size) blocks.push({type:"TextBlock",
+    text:"รายชื่อสาขา Quality บางส่วนถูกย่อเพื่อจำกัดขนาดข้อความ",wrap:true});
+  if (!quality.length) blocks.push({type:"TextBlock",
+    text:"ไม่พบรายการ Quality จากกลุ่มต่างจังหวัดในช่วงเวลานี้",wrap:true});
   return {type:"message", attachments:[{
     contentType:"application/vnd.microsoft.card.adaptive", contentUrl:null,
     content:{"$schema":"http://adaptivecards.io/schemas/adaptive-card.json",
-      type:"AdaptiveCard",version:"1.2",body:blocks},
+      type:"AdaptiveCard",version:"1.2",body:blocks,
+      ...(downloadUrl ? {actions:[{type:"Action.OpenUrl",
+        title:"ดาวน์โหลดไฟล์รายวันสำหรับ Pivot (.csv)",url:downloadUrl}]} : {})},
   }]};
 }
 Deno.serve(async req=>{
@@ -122,8 +216,33 @@ Deno.serve(async req=>{
   // Explicitly requested Teams connectivity test. Never touches the scheduled
   // report's idempotency record and is restricted to one request per local day.
   const requestBody = await req.json().catch(() => ({})) as {
-    test_send_once?:boolean; test_real_date?:string;
+    test_send_once?:boolean; test_real_date?:string; test_combined_date?:string;
+    test_group_file_date?:string;
+    preview_date?:string;
   };
+  // Authenticated read-only preview. No Teams call or dispatch claim.
+  if (requestBody?.preview_date !== undefined) {
+    const date=requestBody.preview_date;
+    if (typeof date!=="string" || !/^\d{4}-\d{2}-\d{2}$/.test(date))
+      return Response.json({status:"INVALID_PREVIEW_DATE"},{status:400});
+    const midnight=Date.parse(date+"T00:00:00.000Z");
+    if (!Number.isFinite(midnight) ||
+        new Date(midnight).toISOString().slice(0,10)!==date)
+      return Response.json({status:"INVALID_PREVIEW_DATE"},{status:400});
+    try {
+      const start=new Date(midnight-7*3600000).toISOString();
+      const end=new Date(midnight+17*3600000).toISOString();
+      const [receiving,quality,signal]=await Promise.all([
+        loadIssues(start,end),loadQualityIssues(start,end),loadReceivingSignal(start,end),
+      ]);
+      return Response.json({status:"PREVIEW_ONLY",date,
+        receiving_count:receiving.length,quality_count:quality.length,
+        review_count:signal.reviewCount,intake_confirmed:signal.intakeConfirmed,
+        card:card(date,receiving,quality,undefined,signal)});
+    } catch (_) {
+      return Response.json({status:"PREVIEW_FAILED",date},{status:500});
+    }
+  }
   if (requestBody?.test_send_once === true) {
     const yesterday=bangkokYesterday();
     const testDate=new Date(Date.parse(yesterday.date+"T00:00:00Z")+86400000)
@@ -150,7 +269,7 @@ Deno.serve(async req=>{
               {type:"TextBlock",text:"WHservice | ทดสอบการเชื่อมต่อ Teams",weight:"Bolder",
                 size:"Medium",wrap:true},
               {type:"TextBlock",text:"ข้อความทดสอบ 1 ครั้ง • "+sentAt+" (เวลาไทย)",wrap:true},
-              {type:"TextBlock",text:"ทดสอบเส้นทาง Supabase → Teams ส่วนตัวสำเร็จเมื่อได้รับข้อความนี้",
+              {type:"TextBlock",text:"ทดสอบเส้นทาง Supabase → Teams กลุ่ม WH section สำเร็จเมื่อได้รับข้อความนี้",
                 wrap:true},
               {type:"TextBlock",text:"ไม่ใช่รายงานสินค้าจริง และไม่มีการสร้างรายการปัญหา",
                 wrap:true,isSubtle:true},
@@ -255,6 +374,111 @@ Deno.serve(async req=>{
     }
   }
 
+  // One authorized combined-data test for 22 Oct. Its dispatch key cannot
+  // collide with either the scheduled report or the earlier real-data test.
+  if (requestBody?.test_combined_date === "2026-10-22") {
+    const date="2026-10-22", destination="TEST-COMBINED-20261022";
+    const start="2026-10-21T17:00:00.000Z", end="2026-10-22T17:00:00.000Z";
+    const dispatchPath="receiving_report_dispatches?report_date=eq."+date+
+      "&destination=eq."+destination;
+    try {
+      const [receiving,quality]=await Promise.all([
+        loadIssues(start,end),loadQualityIssues(start,end),
+      ]);
+      if (!quality.length) return Response.json({status:"NO_REAL_QUALITY_DATA",
+        date},{status:409});
+      const claimed=await db("receiving_report_dispatches?on_conflict=report_date,destination",
+        "POST",{report_date:date,destination,status:"SENDING"},
+        "resolution=ignore-duplicates,return=representation");
+      if (!Array.isArray(claimed)||!claimed.length)
+        return Response.json({status:"COMBINED_ALREADY_ATTEMPTED",date});
+      try {
+        const payload=card(date,receiving,quality);
+        payload.attachments[0].content.body.unshift({type:"TextBlock",
+          text:"ทดสอบข้อมูลจริงครั้งเดียว | แยกจากรายงานประจำวัน",
+          weight:"Bolder",wrap:true});
+        const response=await fetch(env("TEAMS_WEBHOOK_URL"),{
+          method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify(payload),
+        });
+        if (!response.ok) throw new Error("TEAMS_COMBINED_HTTP_"+response.status);
+        await db(dispatchPath,"PATCH",{status:"SENT",
+          updated_at:new Date().toISOString(),error_code:null});
+        return Response.json({status:"COMBINED_ACCEPTED_BY_TEAMS_WORKFLOW",date,
+          destination,receiving_count:receiving.length,quality_count:quality.length,
+          quality_branches:new Set(quality.map(q=>q.branch).filter(Boolean)).size,
+          webhook_http_status:response.status});
+      } catch (error) {
+        const code=error instanceof Error?error.message.slice(0,70):"UNKNOWN";
+        await db(dispatchPath,"PATCH",{status:"FAILED",
+          updated_at:new Date().toISOString(),error_code:code}).catch(()=>{});
+        return Response.json({status:"COMBINED_SEND_FAILED",date,error_code:code},
+          {status:502});
+      }
+    } catch (_) {
+      console.error("Combined test failed before dispatch.");
+      return Response.json({status:"COMBINED_PREP_FAILED",date},{status:500});
+    }
+  }
+
+  // One requested end-to-end group-chat and daily-file test. This uses real
+  // prior-day rows and its own dispatch and Storage object, so it cannot
+  // resend or replace the scheduled 3 Nov report.
+  if (requestBody?.test_group_file_date !== undefined &&
+      requestBody.test_group_file_date !== "2026-11-03")
+    return Response.json({status:"INVALID_GROUP_FILE_TEST_DATE"},{status:400});
+  if (requestBody?.test_group_file_date === "2026-11-03") {
+    const date="2026-11-03", destination="TEST-WH-GROUP-FILE-20261104";
+    const start="2026-11-02T17:00:00.000Z", end="2026-11-03T17:00:00.000Z";
+    const dispatchPath="receiving_report_dispatches?report_date=eq."+date+
+      "&destination=eq."+destination;
+    try {
+      const prior=await db(dispatchPath+"&select=status") as Array<{status:string}>;
+      if (prior.length) return Response.json({status:"GROUP_FILE_ALREADY_ATTEMPTED",
+        date,previousStatus:prior[0].status});
+      const [receiving,quality]=await Promise.all([
+        loadIssues(start,end),loadQualityIssues(start,end),
+      ]);
+      if (!quality.length) return Response.json({status:"NO_REAL_QUALITY_DATA",date},
+        {status:409});
+      const claimed=await db("receiving_report_dispatches?on_conflict=report_date,destination",
+        "POST",{report_date:date,destination,status:"SENDING"},
+        "resolution=ignore-duplicates,return=representation");
+      if (!Array.isArray(claimed)||!claimed.length)
+        return Response.json({status:"GROUP_FILE_ALREADY_ATTEMPTED",date});
+      try {
+        const csv=buildDailyCsv(date,receiving,quality);
+        const downloadUrl=await saveDailyFile(env("SUPABASE_URL"),
+          env("SUPABASE_SERVICE_ROLE_KEY"),date,csv,fetch,"TEST-WH-20261104");
+        const payload=card(date,receiving,quality,downloadUrl);
+        payload.attachments[0].content.body.unshift({type:"TextBlock",
+          text:"ทดสอบรายงานจริง 1 ครั้ง | แชต WH section พร้อมไฟล์รายวัน",
+          weight:"Bolder",wrap:true});
+        const response=await fetch(env("TEAMS_WEBHOOK_URL"),{
+          method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify(payload),
+        });
+        if (!response.ok) throw new Error("TEAMS_GROUP_FILE_HTTP_"+response.status);
+        await db(dispatchPath,"PATCH",{status:"SENT",
+          updated_at:new Date().toISOString(),error_code:null});
+        return Response.json({status:"GROUP_FILE_ACCEPTED_BY_TEAMS_WORKFLOW",date,
+          destination,receiving_count:receiving.length,quality_count:quality.length,
+          quality_branches:new Set(quality.map(q=>q.branch).filter(Boolean)).size,
+          file_name:"WHservice-issues-2026-11-03-TEST-WH-20261104.csv",
+          webhook_http_status:response.status});
+      } catch (error) {
+        const code=error instanceof Error?error.message.slice(0,70):"UNKNOWN";
+        await db(dispatchPath,"PATCH",{status:"FAILED",
+          updated_at:new Date().toISOString(),error_code:code}).catch(()=>{});
+        return Response.json({status:"GROUP_FILE_SEND_FAILED",date,error_code:code},
+          {status:502});
+      }
+    } catch (_) {
+      console.error("One-time group file report failed before dispatch.");
+      return Response.json({status:"GROUP_FILE_PREP_FAILED",date},{status:500});
+    }
+  }
+
   const day=bangkokYesterday();
   const destination="teams-personal-chat";
   try {
@@ -272,16 +496,24 @@ Deno.serve(async req=>{
         previousStatus:previous?.[0]?.status||"UNKNOWN"},{status:409});
     }
     try {
-      const issues=await loadIssues(day.start,day.end);
+      const [issues,quality,signal]=await Promise.all([
+        loadIssues(day.start,day.end),loadQualityIssues(day.start,day.end),
+        loadReceivingSignal(day.start,day.end),
+      ]);
+      const csv=buildDailyCsv(day.date,issues,quality);
+      const downloadUrl=await saveDailyFile(env("SUPABASE_URL"),
+        env("SUPABASE_SERVICE_ROLE_KEY"),day.date,csv);
       // Webhook must be created from a Microsoft Teams Workflows CHAT template, scoped to the requested 1:1 recipient.
       const response=await fetch(env("TEAMS_WEBHOOK_URL"),{
         method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify(card(day.date,issues)),
+        body:JSON.stringify(card(day.date,issues,quality,downloadUrl,signal)),
       });
       if (!response.ok) throw new Error("TEAMS_HTTP_"+response.status);
       await db("receiving_report_dispatches?report_date=eq."+day.date+"&destination=eq."+destination,
         "PATCH",{status:"SENT",updated_at:new Date().toISOString(),error_code:null});
-      return new Response(JSON.stringify({status:"SENT",date:day.date,count:issues.length}),{status:200});
+      return new Response(JSON.stringify({status:"SENT",date:day.date,
+        receiving_count:issues.length,quality_count:quality.length,
+        file_name:dailyCsvName(day.date)}),{status:200});
     } catch (error) {
       const code=error instanceof Error ? error.message.slice(0,70) : "UNKNOWN";
       await db("receiving_report_dispatches?report_date=eq."+day.date+"&destination=eq."+destination,
@@ -293,4 +525,3 @@ Deno.serve(async req=>{
     return new Response("Report delivery failed",{status:500});
   }
 });
-

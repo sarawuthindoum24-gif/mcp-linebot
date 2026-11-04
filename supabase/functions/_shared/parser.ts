@@ -4,17 +4,24 @@ export interface ParsedItem {
   branch: string;
   product: string;
   issue_date: string;
-  ordered_qty: number;
-  received_qty: number;
-  delta_qty: number;
+  ordered_qty: number | null;
+  received_qty: number | null;
+  delta_qty: number | null;
+  reported_missing_qty: number | null;
+  reported_action: string | null;
   unit: string;
-  variance_type: "SHORT" | "OVER";
+  variance_type: "SHORT" | "OVER" | "NOT_RECEIVED" | "INCOMPLETE_RECEIPT";
 }
 export interface ParsedMessage {
   branch: string | null;
   issue_date: string;
   items: ParsedItem[];
   unparsed_lines: number;
+}
+
+/** A candidate with no confidently parsed rows must be reviewed, never counted as zero issues. */
+export function isReceivingIssueCandidate(raw: string): boolean {
+  return /(?:ไม่ได้รับ(?:สินค้า)?|ได้รับ(?:สินค้า)?ไม่ครบ|รับสินค้า\s*ไม่ครบ|รับขาด|รับเกิน|ขาด\s*\/\s*เกิน|ยอดขาด|ชั่งขาด|ชั่งเกิน)/u.test(raw);
 }
 
 function digits(s: string): string {
@@ -31,7 +38,7 @@ function dateInBangkok(ms: number): string {
   return find("year") + "-" + find("month") + "-" + find("day");
 }
 function messageDate(s: string, fallbackMs: number): string {
-  const m = digits(s).match(/วันที่\s*(\d{1,2})\s*[\/\-.]\s*(\d{1,2})\s*[\/\-.]\s*(\d{2,4})/);
+  const m = digits(s).match(/วันที่\s*(?:แจ้ง|รับสินค้า|เกิดเหตุ)?\s*(\d{1,2})\s*[\/\-.]\s*(\d{1,2})\s*[\/\-.]\s*(\d{2,4})/);
   if (!m) return dateInBangkok(fallbackMs);
   let year = Number(m[3]);
   if (year < 100) year += 2500;
@@ -50,6 +57,7 @@ function normalizeUnit(unit: string): {kind: "weight" | "count"; unit: string; f
   if (["ชิ้น", "ลัง", "กล่อง", "แพ็ค", "ถุง", "ขวด", "แพ็ก", "ห่อ"].includes(u)) return {kind:"count", unit:u, factor:1};
   return null;
 }
+/** Handles numbered and bulleted multi-line LINE receiving reports. */
 export function parseReceivingMessage(raw: string, sentMs: number): ParsedMessage {
   const text = digits(raw).replace(/\r/g, "");
   const header = text.split("\n").map(x => x.trim()).find(Boolean) || "";
@@ -58,32 +66,105 @@ export function parseReceivingMessage(raw: string, sentMs: number): ParsedMessag
   const issue_date = messageDate(text, sentMs);
   const result: ParsedItem[] = [];
   let unparsed_lines = 0;
-  // A line is a possible item only when it begins with a bullet and has an order/actual label.
+
   const lines = text.split("\n");
-  const unitRe = "(กก\\.?|kg|กรัม|g|ชิ้น|ลัง|กล่อง|แพ็ค|แพ็ก|ถุง|ขวด|ห่อ)";
-  const pattern = new RegExp("^\\s*[-•*]\\s*(.+?)\\s+ยอดสั่ง\\s*([0-9,.]+)\\s*" + unitRe + "\\s*ได้รับจริง\\s*([0-9,.]+)\\s*" + unitRe, "i");
+  const unitRe = "(กก\\.?|kg\\.?|กรัม|g\\.?|ชิ้น|ลัง|กล่อง|แพ็ค|แพ็ก|ถุง|ขวด|ห่อ)";
+  const quantityRe = "([0-9][0-9,]*(?:\\.[0-9]+)?)";
+  const pair = new RegExp(
+    "^(.+?)\\s*(?:ยอดสั่ง|สั่ง)\\s*" + quantityRe + "\\s*" + unitRe + "?" +
+    "\\s*(?:(?:ได้รับจริง|ได้รับ|รับจริง|รับ)\\s*" + quantityRe + "\\s*" + unitRe + "?|ไม่ได้รับ(?:สินค้า|เลย)?)",
+    "i",
+  );
+  // The "short 6 กก." suffix can provide a missing unit, never a missing quantity.
+  const statedUnit = new RegExp("(?:ส่วนต่าง|รับขาด|ขาด|เกิน)\\s*" + quantityRe + "\\s*" + unitRe, "i");
+  const reportedItem = new RegExp("^(.+?)\\s+(?:จำนวน\\s*)?" + quantityRe +
+    "\\s*" + unitRe + "(?:\\s|$)", "i");
+  const marker = /^\s*(?:[-•*]\s*|[0-9]{1,3}[.)](?![0-9])\s*)(.+)$/;
+  const reported_action = text.match(/ขออนุญาตโอนคืนสินค้า|ขออนุญาตโอนคืน|โอนคืนเรียบร้อย/u)?.[0] || null;
+
+  let current: {index: number; lines: string[]} | null = null;
+  const flush = () => {
+    if (!current) return;
+    const combined = current.lines.join(" ").replace(/\s+/g, " ").trim();
+    const index = current.index;
+    current = null;
+    if (!/(?:ยอดสั่ง|สั่ง)/.test(combined)) {
+      const hasNotReceived=/(?:ไม่ได้รับ(?:สินค้า)?)/u.test(combined);
+      const hasIncomplete=/(?:ได้รับ(?:สินค้า)?ไม่ครบ|รับสินค้าไม่ครบ)/u.test(combined);
+      const globalNotReceived=/(?:ไม่ได้รับ(?:สินค้า)?)/u.test(text);
+      const globalIncomplete=/(?:ได้รับ(?:สินค้า)?ไม่ครบ|รับสินค้าไม่ครบ)/u.test(text);
+      const issueType=hasNotReceived && !hasIncomplete ? "NOT_RECEIVED" :
+        hasIncomplete && !hasNotReceived ? "INCOMPLETE_RECEIPT" :
+        !hasNotReceived && !hasIncomplete && globalNotReceived !== globalIncomplete ?
+          (globalNotReceived ? "NOT_RECEIVED" : "INCOMPLETE_RECEIPT") : null;
+      if (!issueType) return;
+      const m=combined.match(reportedItem);
+      const unit=m ? normalizeUnit(m[3]) : null;
+      const amount=m && unit ? Math.round(number(m[2])*unit.factor*1000)/1000 : NaN;
+      if (!branch || !m?.[1]?.trim() || !unit || !Number.isFinite(amount) || amount<=0) {
+        unparsed_lines++;
+        return;
+      }
+      result.push({index,branch,product:m[1].trim(),issue_date,
+        ordered_qty:null,received_qty:issueType==="NOT_RECEIVED"?0:null,
+        delta_qty:null,reported_missing_qty:amount,reported_action,
+        unit:unit.unit,variance_type:issueType});
+      return;
+    }
+    const m = combined.match(pair);
+    if (!m || !branch) { unparsed_lines++; return; }
+
+    const otherUnit = combined.slice(m[0].length).match(statedUnit)?.[2];
+    const explicitOrderedUnit = m[3];
+    const explicitReceivedUnit = m[5];
+    const defaultUnit = explicitOrderedUnit || explicitReceivedUnit || otherUnit;
+    const a = normalizeUnit(explicitOrderedUnit || defaultUnit || "");
+    const b = normalizeUnit(explicitReceivedUnit || defaultUnit || "");
+    if (!a || !b || a.kind !== b.kind ||
+        (a.kind === "count" && a.unit !== b.unit)) {
+      unparsed_lines++;
+      return;
+    }
+
+    const ordered = Math.round(number(m[2]) * a.factor * 1000) / 1000;
+    // "ไม่ได้รับสินค้า" is an explicitly stated zero; no inference for unspecified actual amounts.
+    const received = m[4] === undefined ? 0 :
+      Math.round(number(m[4]) * b.factor * 1000) / 1000;
+    const difference = Math.round((received - ordered) * 1000) / 1000;
+    if (!Number.isFinite(ordered) || !Number.isFinite(received) ||
+        ordered < 0 || received < 0 || !m[1].trim()) {
+      unparsed_lines++;
+      return;
+    }
+    if (difference === 0) return;
+    // Weighted goods use an inclusive +/- 3 kg tolerance after gram normalization.
+    // Count units have no kilogram conversion, so any nonzero difference is an issue.
+    const notReceived = ordered > 0 && received === 0;
+    if (!notReceived && a.kind === "weight" && Math.abs(Math.round(difference * 1000)) <= 3000) return;
+
+    result.push({
+      index, branch, product: m[1].trim().replace(/[:：-]\s*$/, ""),
+      issue_date, ordered_qty: ordered, received_qty: received,
+      delta_qty: difference, reported_missing_qty:null,reported_action,unit: a.unit,
+      variance_type: notReceived ? "NOT_RECEIVED" : difference < 0 ? "SHORT" : "OVER",
+    });
+  };
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
-    if (!/^[-•*]/.test(line) || !/(ยอดสั่ง|ได้รับจริง)/.test(line)) continue;
-    const m = line.match(pattern);
-    if (!m || !branch) { unparsed_lines++; continue; }
-    const a = normalizeUnit(m[3]), b = normalizeUnit(m[5]);
-    if (!a || !b || a.kind !== b.kind || (a.kind === "count" && a.unit !== b.unit)) {
-      unparsed_lines++; continue;
+    const m = line.match(marker);
+    const next = lines[i+1]?.trim() || "";
+    const unbulletedProduct = Boolean(line && !/^สาขา/u.test(line) &&
+      (/^(?:ยอดสั่ง|สั่ง)/u.test(next) ||
+       (/(?:ยอดสั่ง|สั่ง)/u.test(line) &&
+        /(?:รับจริง|ได้รับจริง|ไม่ได้รับ)/u.test(line))));
+    if (m || unbulletedProduct) {
+      flush();
+      current = {index: i + 1, lines: [m ? m[1] : line]};
+    } else if (current && line) {
+      current.lines.push(line);
     }
-    const ordered = Math.round(number(m[2]) * a.factor * 1000) / 1000;
-    const received = Math.round(number(m[4]) * b.factor * 1000) / 1000;
-    const difference = Math.round((received - ordered) * 1000) / 1000;
-    if (!Number.isFinite(ordered) || !Number.isFinite(received) || ordered < 0 || received < 0) {
-      unparsed_lines++; continue;
-    }
-    if (difference === 0) continue;
-    if (a.kind === "weight" && Math.abs(difference) <= 5) continue; // mandatory hard exclusion
-    result.push({
-      index: i + 1, branch, product: m[1].trim(), issue_date,
-      ordered_qty: ordered, received_qty: received, delta_qty: difference,
-      unit: a.unit, variance_type: difference < 0 ? "SHORT" : "OVER",
-    });
   }
+  flush();
   return {branch, issue_date, items: result, unparsed_lines};
 }
