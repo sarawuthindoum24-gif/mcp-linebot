@@ -1,5 +1,17 @@
 # BNN Receiving Issue Bot — Supabase-first (Draft)
 
+## Current receiving rule — 2 Nov 2026
+
+- For weighed goods, convert grams to kilograms and report a shortage or overage only when the absolute difference exceeds **3.000 kg**. Exactly +3.000 or −3.000 kg is within tolerance.
+- For counted goods (pieces, bags, boxes, etc.), report every nonzero shortage or overage; a kilogram tolerance cannot be applied to count units.
+- The old 5 kg examples and 3% overage references in historical checkpoints below describe earlier releases, not the current rule. The live parser, database check, Teams text, Apps Script mirror, Dashboard, and Excel export use the rule above. Receiving intake from the actual LINE group still requires proof.
+
+## Daily Pivot file — 4 Nov 2026
+
+At the 08:00 Asia/Bangkok scheduled dispatch, `daily-teams-report` creates one UTF-8 CSV for the **previous Bangkok calendar day** and places a download button in the existing Teams personal-chat card. The file has one header and one row per actual Receiving or upcountry Quality issue. It has no summary rows or merged cells, so Excel can use it directly as a Pivot source. Separate numeric quantity and unit columns, issue category, branch, product, source, message date/time, defect, resolution and status retain the available source values. The cause column says `ยังไม่ระบุสาเหตุ` until a source records a real cause. A zero-row Receiving section is not proof that LINE intake is working; the card keeps the unconfirmed-intake warning.
+
+The CSV is held in the private `whservice-daily-reports` Storage bucket. The button uses a 90-day signed download link; download a copy before expiry for long-term Pivot work. A report date is claimed once in `receiving_report_dispatches`; existing `SENT` dates are never resent. The webhook sends a card containing a download link because Teams Workflows incoming webhooks do not upload a native Teams file attachment.
+
 ## Release checkpoint — 21 Oct 2026 (20:45 Bangkok)
 
 - Existing Apps Script project `1orBKwfDOA8FntozbWpy-agunJM0ZC3O_nJFfEUlIRW4ZOzuQk_9i-5gA` was cloned/backed up and updated **in place** using authenticated clasp; remote readback confirmed the idempotent `installReceivingSyncTrigger` guard and read-only `auditReceivingSyncSetup`. The saved live manifest was already valid; the browser's extra brace was unsaved.
@@ -19,7 +31,7 @@
 2. Verify the `x-line-signature` HMAC-SHA256 against the **channel secret** and the unchanged raw HTTP body before parsing.
 3. Detect branch name, issue date, and individual product lines.
 4. Calculate `received_qty - ordered_qty` from actual quantities. Positive = OVER, negative = SHORT.
-5. **Do not store weighted lines whose absolute difference is at most 5.000 kg (including exactly 5.000 kg).** Grams are converted to kilograms; counted goods are not subject to this threshold.
+5. **Do not store weighted lines whose absolute difference is at most 3.000 kg (including exactly 3.000 kg).** Grams are converted to kilograms; counted goods with any nonzero difference are reportable.
 6. Store eligible product items only in Supabase PostgreSQL. Neither rejected raw lines nor complete LINE raw message payloads are stored by this new bot.
 7. Collect only minimal `line_message_id` metadata for unparsed-item review; no raw text.
 8. On LINE unsend, mark matched stored items void (do not delete audit history).
@@ -28,10 +40,10 @@
 
 ## Example acceptance
 
-- Branch จตุจักรชลบุรี; ปลาหมึกกรอบ ordered 25 kg, actual 30 kg → +5 kg → **not stored**
-- Same branch; ปลาหมึกสด ordered 30 kg, actual 25 kg → −5 kg → **not stored**
-- 6 kg / −6 kg → stored.
-- Two units short (`ชิ้น`) → stored.
+- Branch จตุจักรชลบุรี; ปลาหมึกกรอบ ordered 25 kg, actual 28 kg → +3 kg → **not stored**
+- Same branch; ปลาหมึกสด ordered 30 kg, actual 27 kg → −3 kg → **not stored**
+- +3.001 kg / −3.001 kg → stored.
+- One unit short or over (`ชิ้น`) → stored.
 - Missing unit or other ambiguous fields → safe needs-review marker, not an invented quantity.
 
 ## Configuration (never commit tokens)

@@ -108,13 +108,15 @@ test("real group route, quantity rule, retry, and unsend are idempotent", async 
         "- B ยอดสั่ง 100 กก. ได้รับจริง 103 กก.",
         "- C ยอดสั่ง 100 กก. ได้รับจริง 103.001 กก.",
         "- D ยอดสั่ง 10 ถุง ไม่ได้รับสินค้า",
+        "- E ยอดสั่ง 100 ชิ้น ได้รับจริง 101 ชิ้น",
+        "- F ยอดสั่ง 100 กก. ได้รับจริง 96.999 กก.",
       ].join("\n")}};
   assert.equal((await signedRequest([event])).status,200);
   assert.equal(registry.get(groupId).route,"RECEIVING");
   assert.equal(messages.get("synthetic-message-1").route,"RECEIVING");
-  assert.deepEqual([...issues.values()].map(x=>x.delta_qty),[-3,3.001,-10]);
+  assert.deepEqual([...issues.values()].map(x=>x.delta_qty),[3.001,-10,1,-3.001]);
   assert.equal((await signedRequest([event])).status,200);
-  assert.equal(issues.size,3);
+  assert.equal(issues.size,4);
   assert.equal((await signedRequest([{type:"unsend",source:event.source,
     unsend:{messageId:event.message.id}}])).status,200);
   assert.ok([...issues.values()].every(x=>x.is_void===true && x.voided_at));

@@ -105,12 +105,9 @@ export function parseReceivingMessage(raw: string, sentMs: number): ParsedMessag
       return;
     }
     if (difference === 0) return;
-    // No shortages are tolerated. An overage of exactly 3% is acceptable.
-    // Quantities have already been normalized to 3 decimal places (kg or count).
-    // Compare scaled integers so exact-boundary cases are deterministic.
-    if (difference > 0 && ordered > 0 &&
-        Math.round(difference * 1000) * 100 <= Math.round(ordered * 1000) * 3) return;
-    // Ordered zero and received > zero is always an overage issue.
+    // Weighted goods use an inclusive +/- 3 kg tolerance after gram normalization.
+    // Count units have no kilogram conversion, so any nonzero difference is an issue.
+    if (a.kind === "weight" && Math.abs(Math.round(difference * 1000)) <= 3000) return;
 
     result.push({
       index, branch, product: m[1].trim().replace(/[:：-]\s*$/, ""),

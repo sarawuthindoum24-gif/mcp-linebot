@@ -1,9 +1,13 @@
-type Issue = {
+import { buildDailyCsv, dailyCsvName } from "../_shared/daily-export.ts";
+import type { DailyReceivingIssue, DailyQualityIssue } from "../_shared/daily-export.ts";
+import { saveDailyFile } from "../_shared/daily-storage.ts";
+
+type Issue = DailyReceivingIssue & {
   branch: string; product: string; unit: string; delta_qty: number;
   ordered_qty: number; received_qty: number;
   variance_type: "SHORT" | "OVER"; status: string;
 };
-type QualityIssue = {
+type QualityIssue = DailyQualityIssue & {
   branch: string | null; product: string | null;
   quantity_text: string | null; weight_text: string | null; defect: string | null;
 };
@@ -50,9 +54,9 @@ async function loadIssues(start:string,end:string): Promise<Issue[]> {
   const all: Issue[] = [];
   for (let offset=0; offset<=10000; offset+=1000) {
     const params = new URLSearchParams({
-      select:"branch,product,unit,ordered_qty,received_qty,delta_qty,variance_type,status",
+      select:"id,line_message_id,line_item_index,message_at,branch,product,unit,ordered_qty,received_qty,delta_qty,variance_type,status",
       message_at:"gte."+start, and:"(message_at.lt."+end+",is_void.eq.false)",
-      order:"branch.asc", limit:"1000", offset:String(offset),
+      order:"message_at.asc,id.asc", limit:"1000", offset:String(offset),
     });
     const page = await db("receiving_issues?" + params.toString()) as Issue[];
     all.push(...page);
@@ -64,11 +68,11 @@ async function loadQualityIssues(start:string,end:string): Promise<QualityIssue[
   const all: QualityIssue[] = [];
   for (let offset=0; offset<=10000; offset+=1000) {
     const params = new URLSearchParams({
-      select:"branch,product,quantity_text,weight_text,defect",
+      select:"line_message_id,message_at,branch,product,supplier,lot,quantity_text,weight_text,defect,resolution,status",
       group_id:"eq."+UPcountry_QUALITY_GROUP_ID,
       message_at:"gte."+start,
       and:"(message_at.lt."+end+",is_void.eq.false)",
-      order:"branch.asc",
+      order:"message_at.asc,line_message_id.asc",
       limit:"1000", offset:String(offset),
     });
     const page = await db("line_quality_issues?" + params.toString()) as QualityIssue[];
@@ -77,7 +81,7 @@ async function loadQualityIssues(start:string,end:string): Promise<QualityIssue[
   }
   throw new Error("QUALITY_REPORT_TOO_LARGE_REQUIRE_PAGINATION");
 }
-function card(date:string, issues:Issue[], quality:QualityIssue[]) {
+function card(date:string, issues:Issue[], quality:QualityIssue[], downloadUrl?:string) {
   const byBranch = new Map<string,Issue[]>();
   for (const item of issues) byBranch.set(item.branch,[...(byBranch.get(item.branch)||[]),item]);
   const qualityByBranch = new Map<string,QualityIssue[]>();
@@ -96,7 +100,7 @@ function card(date:string, issues:Issue[], quality:QualityIssue[]) {
       " รายการ จาก "+byBranch.size+" สาขา",
     weight:"Bolder", wrap:true,
   },{
-    type:"TextBlock", text:"รับขาดทุกจำนวน (สินค้าชั่ง: น้ำหนักชั่งขาด) | รับเกินเฉพาะส่วนที่มากกว่า 3% ของยอดสั่ง",
+    type:"TextBlock", text:"สินค้าชั่ง: รับขาด–เกินเมื่อส่วนต่างมากกว่า 3 กก. | สินค้านับ: ขาด–เกินทุกจำนวน",
     wrap:true, isSubtle:true,
   }];
   let included = 0;
@@ -104,13 +108,14 @@ function card(date:string, issues:Issue[], quality:QualityIssue[]) {
     const shortage=values.filter(v=>v.variance_type==="SHORT");
     const over=values.filter(v=>v.variance_type==="OVER");
     const weightShort=shortage.filter(v=>v.unit==="kg");
+    const weightOver=over.filter(v=>v.unit==="kg");
     const details=values.map(v=>v.product+": สั่ง "+v.ordered_qty+" "+v.unit+
       ", รับ "+v.received_qty+" "+v.unit+" | "+
       (v.variance_type==="SHORT" ? (v.unit==="kg" ? "น้ำหนักชั่งขาด " : "รับขาด ") :
-       "รับเกินเกณฑ์ 3% ")+Math.abs(v.delta_qty)+" "+v.unit+
+       (v.unit==="kg" ? "น้ำหนักชั่งเกิน " : "รับเกิน "))+Math.abs(v.delta_qty)+" "+v.unit+
       "\nสาเหตุ: รอตรวจสอบใบหยิบ/ใบส่งของและหลักฐานรับสินค้า").join("\n");
     const info="รับขาด "+shortage.length+" รายการ (น้ำหนักชั่งขาด "+weightShort.length+
-      " รายการ) | รับเกินเกณฑ์ 3% "+over.length+" รายการ";
+      " รายการ) | รับเกิน "+over.length+" รายการ (น้ำหนักชั่งเกิน "+weightOver.length+" รายการ)";
     const text=branch+": "+info+"\n"+details;
     if (JSON.stringify(blocks).length+text.length > 22000) break;
     blocks.push({type:"TextBlock", text, wrap:true, separator:true});
@@ -142,7 +147,9 @@ function card(date:string, issues:Issue[], quality:QualityIssue[]) {
   return {type:"message", attachments:[{
     contentType:"application/vnd.microsoft.card.adaptive", contentUrl:null,
     content:{"$schema":"http://adaptivecards.io/schemas/adaptive-card.json",
-      type:"AdaptiveCard",version:"1.2",body:blocks},
+      type:"AdaptiveCard",version:"1.2",body:blocks,
+      ...(downloadUrl ? {actions:[{type:"Action.OpenUrl",
+        title:"ดาวน์โหลดไฟล์รายวันสำหรับ Pivot (.csv)",url:downloadUrl}]} : {})},
   }]};
 }
 Deno.serve(async req=>{
@@ -397,16 +404,20 @@ Deno.serve(async req=>{
       const [issues,quality]=await Promise.all([
         loadIssues(day.start,day.end),loadQualityIssues(day.start,day.end),
       ]);
+      const csv=buildDailyCsv(day.date,issues,quality);
+      const downloadUrl=await saveDailyFile(env("SUPABASE_URL"),
+        env("SUPABASE_SERVICE_ROLE_KEY"),day.date,csv);
       // Webhook must be created from a Microsoft Teams Workflows CHAT template, scoped to the requested 1:1 recipient.
       const response=await fetch(env("TEAMS_WEBHOOK_URL"),{
         method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify(card(day.date,issues,quality)),
+        body:JSON.stringify(card(day.date,issues,quality,downloadUrl)),
       });
       if (!response.ok) throw new Error("TEAMS_HTTP_"+response.status);
       await db("receiving_report_dispatches?report_date=eq."+day.date+"&destination=eq."+destination,
         "PATCH",{status:"SENT",updated_at:new Date().toISOString(),error_code:null});
       return new Response(JSON.stringify({status:"SENT",date:day.date,
-        receiving_count:issues.length,quality_count:quality.length}),{status:200});
+        receiving_count:issues.length,quality_count:quality.length,
+        file_name:dailyCsvName(day.date)}),{status:200});
     } catch (error) {
       const code=error instanceof Error ? error.message.slice(0,70) : "UNKNOWN";
       await db("receiving_report_dispatches?report_date=eq."+day.date+"&destination=eq."+destination,
