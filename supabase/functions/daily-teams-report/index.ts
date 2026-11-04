@@ -232,7 +232,7 @@ Deno.serve(async req=>{
               {type:"TextBlock",text:"WHservice | ทดสอบการเชื่อมต่อ Teams",weight:"Bolder",
                 size:"Medium",wrap:true},
               {type:"TextBlock",text:"ข้อความทดสอบ 1 ครั้ง • "+sentAt+" (เวลาไทย)",wrap:true},
-              {type:"TextBlock",text:"ทดสอบเส้นทาง Supabase → Teams ส่วนตัวสำเร็จเมื่อได้รับข้อความนี้",
+              {type:"TextBlock",text:"ทดสอบเส้นทาง Supabase → Teams กลุ่ม WH section สำเร็จเมื่อได้รับข้อความนี้",
                 wrap:true},
               {type:"TextBlock",text:"ไม่ใช่รายงานสินค้าจริง และไม่มีการสร้างรายการปัญหา",
                 wrap:true,isSubtle:true},

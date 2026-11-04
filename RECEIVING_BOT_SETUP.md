@@ -8,9 +8,15 @@
 
 ## Daily Pivot file — 4 Nov 2026
 
-At the 08:00 Asia/Bangkok scheduled dispatch, `daily-teams-report` creates one UTF-8 CSV for the **previous Bangkok calendar day** and places a download button in the existing Teams personal-chat card. The file has one header and one row per actual Receiving or upcountry Quality issue. It has no summary rows or merged cells, so Excel can use it directly as a Pivot source. Separate numeric quantity and unit columns, issue category, branch, product, source, message date/time, defect, resolution and status retain the available source values. The cause column says `ยังไม่ระบุสาเหตุ` until a source records a real cause. A zero-row Receiving section is not proof that LINE intake is working; the card keeps the unconfirmed-intake warning.
+At the 08:00 Asia/Bangkok scheduled dispatch, `daily-teams-report` creates one UTF-8 CSV for the **previous Bangkok calendar day** and places a download button in the Teams **WH section** group chat card. The file has one header and one row per actual Receiving or upcountry Quality issue. It has no summary rows or merged cells, so Excel can use it directly as a Pivot source. Separate numeric quantity and unit columns, issue category, branch, product, source, message date/time, defect, resolution and status retain the available source values. The cause column says `ยังไม่ระบุสาเหตุ` until a source records a real cause. A zero-row Receiving section is not proof that LINE intake is working; the card keeps the unconfirmed-intake warning.
 
 The CSV is held in the private `whservice-daily-reports` Storage bucket. The button uses a 90-day signed download link; download a copy before expiry for long-term Pivot work. A report date is claimed once in `receiving_report_dispatches`; existing `SENT` dates are never resent. The webhook sends a card containing a download link because Teams Workflows incoming webhooks do not upload a native Teams file attachment.
+
+## Teams destination — 4 Nov 2026
+
+- Live Power Automate Flow **BNN Receiving Issues - WH section Teams Report (Live)** is On. Both card actions (with and without the CSV download button) target the **WH section** group chat, ID `19:c7ff6c2f3d99422c8bacf0d934dd27a8@thread.v2`. The saved Flow was reopened and both recipients and card expressions were read back.
+- `daily-teams-report` v33 is Active. A separate `test_send_once` on 4 Nov at 14:31 Bangkok was accepted by the Teams webhook (HTTP 202); its Power Automate run succeeded. This test used the `teams-personal-chat-TEST` dispatch key and created no Receiving issue. Direct inspection of the resulting group-chat message remains pending.
+- The scheduled dispatch keeps its historical `teams-personal-chat` key solely for duplicate protection. Do not rename this key or reset any `SENT` row. The next scheduled 08:00 Bangkok run will need its own delivery readback. Receiving messages from the actual LINE group are still unverified.
 
 ## Release checkpoint — 21 Oct 2026 (20:45 Bangkok)
 
