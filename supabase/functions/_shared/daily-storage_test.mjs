@@ -28,3 +28,18 @@ test("does not sign or send when upload fails", async () => {
   }), /STORAGE_UPLOAD_409/);
   assert.equal(attempts, 1);
 });
+
+test("one-time group test uploads a separate file without replacing the scheduled file", async () => {
+  const calls = [];
+  const file = "WHservice-issues-2026-11-03-TEST-WH-20261104.csv";
+  const fetcher = async (url, options) => {
+    calls.push({ url: String(url), options });
+    return calls.length === 1
+      ? Response.json({ Key: `whservice-daily-reports/${file}` })
+      : Response.json({ signedURL: `/object/sign/whservice-daily-reports/${file}?token=private` });
+  };
+  const link = await saveDailyFile("https://example.supabase.co", "service-key", "2026-11-03", "\uFEFFa,b\r\n", fetcher, "TEST-WH-20261104");
+  assert.equal(calls.length, 2);
+  assert.match(calls[0].url, new RegExp(`${file}$`));
+  assert.equal(new URL(link).searchParams.get("download"), file);
+});

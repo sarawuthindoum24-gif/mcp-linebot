@@ -182,6 +182,7 @@ Deno.serve(async req=>{
   // report's idempotency record and is restricted to one request per local day.
   const requestBody = await req.json().catch(() => ({})) as {
     test_send_once?:boolean; test_real_date?:string; test_combined_date?:string;
+    test_group_file_date?:string;
     preview_date?:string;
   };
   // Authenticated read-only preview. No Teams call or dispatch claim.
@@ -381,6 +382,64 @@ Deno.serve(async req=>{
     } catch (_) {
       console.error("Combined test failed before dispatch.");
       return Response.json({status:"COMBINED_PREP_FAILED",date},{status:500});
+    }
+  }
+
+  // One requested end-to-end group-chat and daily-file test. This uses real
+  // prior-day rows and its own dispatch and Storage object, so it cannot
+  // resend or replace the scheduled 3 Nov report.
+  if (requestBody?.test_group_file_date !== undefined &&
+      requestBody.test_group_file_date !== "2026-11-03")
+    return Response.json({status:"INVALID_GROUP_FILE_TEST_DATE"},{status:400});
+  if (requestBody?.test_group_file_date === "2026-11-03") {
+    const date="2026-11-03", destination="TEST-WH-GROUP-FILE-20261104";
+    const start="2026-11-02T17:00:00.000Z", end="2026-11-03T17:00:00.000Z";
+    const dispatchPath="receiving_report_dispatches?report_date=eq."+date+
+      "&destination=eq."+destination;
+    try {
+      const prior=await db(dispatchPath+"&select=status") as Array<{status:string}>;
+      if (prior.length) return Response.json({status:"GROUP_FILE_ALREADY_ATTEMPTED",
+        date,previousStatus:prior[0].status});
+      const [receiving,quality]=await Promise.all([
+        loadIssues(start,end),loadQualityIssues(start,end),
+      ]);
+      if (!quality.length) return Response.json({status:"NO_REAL_QUALITY_DATA",date},
+        {status:409});
+      const claimed=await db("receiving_report_dispatches?on_conflict=report_date,destination",
+        "POST",{report_date:date,destination,status:"SENDING"},
+        "resolution=ignore-duplicates,return=representation");
+      if (!Array.isArray(claimed)||!claimed.length)
+        return Response.json({status:"GROUP_FILE_ALREADY_ATTEMPTED",date});
+      try {
+        const csv=buildDailyCsv(date,receiving,quality);
+        const downloadUrl=await saveDailyFile(env("SUPABASE_URL"),
+          env("SUPABASE_SERVICE_ROLE_KEY"),date,csv,fetch,"TEST-WH-20261104");
+        const payload=card(date,receiving,quality,downloadUrl);
+        payload.attachments[0].content.body.unshift({type:"TextBlock",
+          text:"ทดสอบรายงานจริง 1 ครั้ง | แชต WH section พร้อมไฟล์รายวัน",
+          weight:"Bolder",wrap:true});
+        const response=await fetch(env("TEAMS_WEBHOOK_URL"),{
+          method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify(payload),
+        });
+        if (!response.ok) throw new Error("TEAMS_GROUP_FILE_HTTP_"+response.status);
+        await db(dispatchPath,"PATCH",{status:"SENT",
+          updated_at:new Date().toISOString(),error_code:null});
+        return Response.json({status:"GROUP_FILE_ACCEPTED_BY_TEAMS_WORKFLOW",date,
+          destination,receiving_count:receiving.length,quality_count:quality.length,
+          quality_branches:new Set(quality.map(q=>q.branch).filter(Boolean)).size,
+          file_name:"WHservice-issues-2026-11-03-TEST-WH-20261104.csv",
+          webhook_http_status:response.status});
+      } catch (error) {
+        const code=error instanceof Error?error.message.slice(0,70):"UNKNOWN";
+        await db(dispatchPath,"PATCH",{status:"FAILED",
+          updated_at:new Date().toISOString(),error_code:code}).catch(()=>{});
+        return Response.json({status:"GROUP_FILE_SEND_FAILED",date,error_code:code},
+          {status:502});
+      }
+    } catch (_) {
+      console.error("One-time group file report failed before dispatch.");
+      return Response.json({status:"GROUP_FILE_PREP_FAILED",date},{status:500});
     }
   }
 

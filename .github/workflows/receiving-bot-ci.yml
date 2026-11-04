@@ -25,6 +25,6 @@ jobs:
         with:
           node-version: '26'
       - run: node --experimental-strip-types --test supabase/functions/line-webhook/integration_test.mjs
-      - run: node --experimental-strip-types --test supabase/functions/_shared/daily-export_test.mjs supabase/functions/_shared/daily-storage_test.mjs supabase/functions/daily-teams-report/daily_file_test.mjs
+      - run: node --experimental-strip-types --test supabase/functions/_shared/daily-export_test.mjs supabase/functions/_shared/daily-storage_test.mjs supabase/functions/daily-teams-report/daily_file_test.mjs supabase/functions/daily-teams-report/group_file_test.mjs
       - run: node -e "JSON.parse(require('node:fs').readFileSync('apps-script/appsscript.json','utf8'))"
       - run: node --check 'apps-script/รหัส.js'

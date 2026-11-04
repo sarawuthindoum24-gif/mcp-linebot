@@ -6,8 +6,11 @@ const LINK_SECONDS = 90 * 86400;
 export async function saveDailyFile(
   baseUrl: string, serviceKey: string, reportDate: string, csv: string,
   fetcher: typeof fetch = fetch,
+  suffix?: string,
 ): Promise<string> {
-  const name = dailyCsvName(reportDate);
+  if (suffix !== undefined && !/^[A-Za-z0-9-]{1,64}$/.test(suffix))
+    throw new Error("INVALID_FILE_SUFFIX");
+  const name = dailyCsvName(reportDate).replace(/\.csv$/, suffix ? `-${suffix}.csv` : ".csv");
   const objectPath = `${BUCKET}/${name}`;
   const url = new URL(baseUrl);
   if (url.protocol !== "https:") throw new Error("INVALID_STORAGE_URL");
