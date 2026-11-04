@@ -1,14 +1,16 @@
 # BNN Receiving Issue Bot — Supabase-first (Draft)
 
-## Current receiving rule — 2 Nov 2026
+## Current receiving rule — 4 Nov 2026
 
 - For weighed goods, convert grams to kilograms and report a shortage or overage only when the absolute difference exceeds **3.000 kg**. Exactly +3.000 or −3.000 kg is within tolerance.
 - For counted goods (pieces, bags, boxes, etc.), report every nonzero shortage or overage; a kilogram tolerance cannot be applied to count units.
-- The old 5 kg examples and 3% overage references in historical checkpoints below describe earlier releases, not the current rule. The live parser, database check, Teams text, Apps Script mirror, Dashboard, and Excel export use the rule above. Receiving intake from the actual LINE group still requires proof.
+- An explicit `NOT_RECEIVED` report is recorded at every quantity, including weighed goods below 3 kg.
+- When a branch states only the missing quantity, record `INCOMPLETE_RECEIPT` with `reported_missing_qty`; leave ordered, received, and calculated delta blank until verified. Keep the item pending review.
+- The old 5 kg examples and 3% overage references in historical checkpoints below describe earlier releases. The live parser, database checks, Teams text, Apps Script mirror, Dashboard, and Excel export use the current rules.
 
 ## Daily Pivot file — 4 Nov 2026
 
-At the 08:00 Asia/Bangkok scheduled dispatch, `daily-teams-report` creates one UTF-8 CSV for the **previous Bangkok calendar day** and places a download button in the Teams **WH section** group chat card. The file has one header and one row per actual Receiving or upcountry Quality issue. It has no summary rows or merged cells, so Excel can use it directly as a Pivot source. Separate numeric quantity and unit columns, issue category, branch, product, source, message date/time, defect, resolution and status retain the available source values. The cause column says `ยังไม่ระบุสาเหตุ` until a source records a real cause. A zero-row Receiving section is not proof that LINE intake is working; the card keeps the unconfirmed-intake warning.
+At the 08:00 Asia/Bangkok scheduled dispatch, `daily-teams-report` creates one UTF-8 CSV for the **previous Bangkok calendar day** and places a download button in the Teams **WH section** group chat card. The file has one header and one row per actual Receiving or upcountry Quality issue. It has no summary rows or merged cells, so Excel can use it directly as a Pivot source. Separate numeric quantity and unit columns, reported missing quantity, issue category, branch, product, source, message date/time, defect, reported action, resolution and status retain the available source values. The cause column says `ยังไม่ระบุสาเหตุ` until a source records a real cause. A zero-row Receiving section must only say no recorded items when actual LINE intake is confirmed.
 
 The CSV is held in the private `whservice-daily-reports` Storage bucket. The button uses a 90-day signed download link; download a copy before expiry for long-term Pivot work. A report date is claimed once in `receiving_report_dispatches`; existing `SENT` dates are never resent. The webhook sends a card containing a download link because Teams Workflows incoming webhooks do not upload a native Teams file attachment.
 
@@ -16,8 +18,15 @@ The CSV is held in the private `whservice-daily-reports` Storage bucket. The but
 
 - Live Power Automate Flow **BNN Receiving Issues - WH section Teams Report (Live)** is On. Both card actions (with and without the CSV download button) target the **WH section** group chat, ID `19:c7ff6c2f3d99422c8bacf0d934dd27a8@thread.v2`. The saved Flow was reopened and both recipients and card expressions were read back.
 - At 14:47 Bangkok, one isolated real-data test for 3 Nov created `WHservice-issues-2026-11-03-TEST-WH-20261104.csv` (19,744 bytes) in the private bucket and sent a card with its signed download action. The card reports 0 Receiving issues with the unconfirmed LINE-intake warning and 39 upcountry Quality issues from 15 branches. Power Automate run `08584078284372726914850797558CU18` succeeded; its Teams action returned message ID `1793778449976` in the exact WH section group chat. The separate `TEST-WH-GROUP-FILE-20261104` dispatch is `SENT`. The pg_net caller timed out after 5 seconds while the function continued and completed; do not retry it. Direct download through the controlled browser was blocked by the browser client, so opening the downloaded CSV remains unverified.
-- `daily-teams-report` v34 is Active. An earlier separate `test_send_once` on 4 Nov at 14:31 Bangkok was accepted by the Teams webhook (HTTP 202); its Power Automate run succeeded. This test used the `teams-personal-chat-TEST` dispatch key and created no Receiving issue.
-- The scheduled dispatch keeps its historical `teams-personal-chat` key solely for duplicate protection. Do not rename this key or reset any `SENT` row. The next scheduled 08:00 Bangkok run will need its own delivery readback. Receiving messages from the actual LINE group are still unverified.
+- `daily-teams-report` v38 is Active. An earlier separate `test_send_once` on 4 Nov at 14:31 Bangkok was accepted by the Teams webhook (HTTP 202); its Power Automate run succeeded. This test used the `teams-personal-chat-TEST` dispatch key and created no Receiving issue.
+- The scheduled dispatch keeps its historical `teams-personal-chat` key solely for duplicate protection. Do not rename this key or reset any `SENT` row. The next scheduled 08:00 Bangkok run with the new Receiving data still needs its own delivery readback.
+
+## Live intake checkpoint — 4 Nov 2026
+
+- WHservice joined the Receiving LINE group at 16:57 Bangkok. The resulting group registry record is routed to `RECEIVING`. A harmless diagnostic text reached the signed webhook without creating an issue.
+- A subsequent real branch message at 20:22 Bangkok stated one missing product quantity of 15 bags without ordered or received totals. One `INCOMPLETE_RECEIPT` issue was stored from that original LINE message, status `PENDING_REVIEW`; its parse-review record remains visible for follow-up. No screenshot-only historical message was inserted as an incident.
+- Apps Script's existing 15-minute trigger ran successfully at 20:42 Bangkok and logged `issues=1`. Readback of `ISSUES` and `BRANCH_DAILY` confirms one row, 15 bags as the branch-reported missing amount, blank ordered/received/delta values, and pending review. The live Dashboard API returned one Receiving item with the same fields; the HTML Site version 5 was deployed and its Excel output passed a controlled workbook test.
+- Edge functions read back as `line-webhook` v27, `daily-teams-report` v38, `sheets-export` v4, and Dashboard API v3. The 08:00 pg_cron job remains active. Existing `SENT` records were not reset or resent.
 
 ## Release checkpoint — 21 Oct 2026 (20:45 Bangkok)
 
