@@ -118,7 +118,7 @@ function card(date:string, issues:Issue[], quality:QualityIssue[], downloadUrl?:
       " รายการ จาก "+byBranch.size+" สาขา",
     weight:"Bolder", wrap:true,
   },{
-    type:"TextBlock", text:"สินค้าชั่ง: รับขาด–เกินเมื่อส่วนต่างมากกว่า 3 กก. | สินค้านับและไม่ได้รับสินค้า: ทุกจำนวน",
+    type:"TextBlock", text:"รับขาด: ทุกจำนวน (สินค้าชั่ง = น้ำหนักชั่งขาด) | รับเกิน: มากกว่า 3% ของยอดสั่ง | ไม่ได้รับ/ได้รับไม่ครบ: ทุกจำนวน",
     wrap:true, isSubtle:true,
   }];
   let included = 0;
