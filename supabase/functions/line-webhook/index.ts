@@ -1,4 +1,4 @@
-import { parseReceivingMessage } from "../_shared/parser.ts";
+import { parseReceivingMessage, isReceivingIssueCandidate } from "../_shared/parser.ts";
 import { routeFromName,routeFromText,parseQualityMessage,type GroupRoute } from "../_shared/group-routing.ts";
 
 type LineEvent = {
@@ -136,10 +136,13 @@ Deno.serve(async (request) => {
       // Unmapped messages remain in secured intake until the group is identified.
       if (group.route!=="RECEIVING" || item.type!=="text" || !text) continue;
       const parsed=parseReceivingMessage(text,event.timestamp||Date.now());
-      if (parsed.unparsed_lines>0) {
+      const reportedOnly=parsed.items.some(x=>x.delta_qty===null);
+      if (parsed.unparsed_lines>0 || reportedOnly ||
+          (parsed.items.length===0 && isReceivingIssueCandidate(text))) {
         await db("receiving_parse_review?on_conflict=line_message_id","POST",{
           line_message_id:item.id,group_id:groupId,message_at:at,
-          reason:"UNPARSED_ITEM_LINES_"+parsed.unparsed_lines
+          reason:parsed.unparsed_lines>0 ? "UNPARSED_ITEM_LINES_"+parsed.unparsed_lines :
+            reportedOnly ? "REPORTED_ONLY_QUANTITY" : "UNPARSED_RECEIVING_CANDIDATE"
         },"resolution=ignore-duplicates");
       }
       if (!parsed.items.length) continue;
@@ -148,6 +151,7 @@ Deno.serve(async (request) => {
           line_message_id:item.id,line_item_index:x.index,group_id:groupId,
           branch:x.branch,product:x.product,issue_date:x.issue_date,message_at:at,
           ordered_qty:x.ordered_qty,received_qty:x.received_qty,delta_qty:x.delta_qty,
+          reported_missing_qty:x.reported_missing_qty,reported_action:x.reported_action,
           unit:x.unit,variance_type:x.variance_type
         })),"resolution=ignore-duplicates");
     }
