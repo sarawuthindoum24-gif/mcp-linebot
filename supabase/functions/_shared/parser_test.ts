@@ -97,3 +97,42 @@ Deno.test("fractional overage below threshold is accepted, above threshold repor
       r.items[0].delta_qty !== 3.001 || r.items[1].delta_qty !== -0.001)
     throw Error(JSON.stringify(r));
 });
+
+Deno.test("system balance vs actual receipt is a weighed shortage (bullet message)", () => {
+  const raw = [
+    "สาขาเดอะสตรีทรัชดา",
+    "ขออนุญาตโอนคืน",
+    "- เนื้อวัวออสเตรเลีย 3.3 กก.",
+    "เนื่องจากได้รับจริง128.4กก.",
+    "ในระบบ131.7กก.",
+    "ขอบคุณค่ะ",
+  ].join("\n");
+  const r=parseReceivingMessage(raw,Date.parse("2026-11-14T23:09:19Z"));
+  if (r.branch!=="เดอะสตรีทรัชดา" || r.items.length!==1 ||
+      r.items[0].product!=="เนื้อวัวออสเตรเลีย" ||
+      r.items[0].ordered_qty!==131.7 || r.items[0].received_qty!==128.4 ||
+      r.items[0].delta_qty!==-3.3 || r.items[0].variance_type!=="SHORT" ||
+      r.items[0].unit!=="kg" || r.unparsed_lines!==0)
+    throw new Error(JSON.stringify(r));
+});
+
+Deno.test("system balance vs actual receipt supports unbulleted follow-up", () => {
+  const raw = [
+    "สาขาเดอะสตรีทรัชดา",
+    "ขออนุญาตโอนคืน",
+    "เนื้อวัวออสเตรเลีย 3.6 กก.",
+    "เนื่องจากได้รับจริง 118.2 กก.",
+    "ในระบบ 121.8 กก.",
+  ].join("\n");
+  const r=parseReceivingMessage(raw,Date.parse("2026-11-15T19:10:00Z"));
+  if (r.items.length!==1 || r.items[0].delta_qty!==-3.6 ||
+      r.items[0].ordered_qty!==121.8 || r.items[0].received_qty!==118.2)
+    throw new Error(JSON.stringify(r));
+});
+
+Deno.test("system vs actual amount must both be known; avoid inferred incident", () => {
+  const r=parseReceivingMessage(
+    "สาขาเดอะสตรีทรัชดา\nขออนุญาตโอนคืน\n- เนื้อวัวออสเตรเลีย 3.3 กก.\nในระบบ131.7กก.",
+    epoch);
+  if(r.items.length!==0) throw new Error(JSON.stringify(r));
+});
