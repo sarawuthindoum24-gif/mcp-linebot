@@ -136,3 +136,11 @@ Deno.test("system vs actual amount must both be known; avoid inferred incident",
     epoch);
   if(r.items.length!==0) throw new Error(JSON.stringify(r));
 });
+
+Deno.test("do not turn a bare ยอดสั่ง label into a fake product named ยอด", () => {
+  const r=parseReceivingMessage(
+    "สาขา พระราม 2 ขออนุญาตแจ้งปัญหา\nยอดสั่ง 70 กก. รับจริง 72.5 กก.",
+    epoch);
+  if (r.items.some(x=>x.product==="ยอด" || x.product==="ยอดสั่ง"))
+    throw Error(JSON.stringify(r));
+});
