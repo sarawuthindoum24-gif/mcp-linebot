@@ -231,7 +231,7 @@ Deno.serve(async req=>{
   // report's idempotency record and is restricted to one request per local day.
   const requestBody = await req.json().catch(() => ({})) as {
     test_send_once?:boolean; test_real_date?:string; test_combined_date?:string;
-    test_group_file_date?:string;
+    test_group_file_date?:string; test_compact_date?:string;
     preview_date?:string;
   };
   // Authenticated read-only preview. No Teams call or dispatch claim.
@@ -257,6 +257,68 @@ Deno.serve(async req=>{
       return Response.json({status:"PREVIEW_FAILED",date},{status:500});
     }
   }
+  // Explicit user request: send the current compact card for 2026-11-15
+  // exactly once without altering the regular 08:00 report dispatch.
+  if (requestBody?.test_compact_date !== undefined) {
+    if (requestBody.test_compact_date!=="2026-11-15")
+      return Response.json({status:"INVALID_COMPACT_TEST_DATE"},{status:400});
+    const date="2026-11-15";
+    const destination="TEST-COMPACT-CARD-20261115-20261116";
+    const start="2026-11-14T17:00:00.000Z";
+    const end="2026-11-15T17:00:00.000Z";
+    const claimPath="receiving_report_dispatches?on_conflict=report_date,destination";
+    const updatePath="receiving_report_dispatches?report_date=eq."+date+
+      "&destination=eq."+destination;
+    try {
+      // Check for prior attempts BEFORE preparing the report; unique key guards races.
+      const existing=await db(updatePath+"&select=status") as Array<{status:string}>;
+      if (existing.length) return Response.json({status:"COMPACT_TEST_ALREADY_ATTEMPTED",
+        date,previousStatus:existing[0].status});
+      const [receiving,quality,signal]=await Promise.all([
+        loadIssues(start,end),loadQualityIssues(start,end),loadReceivingSignal(start,end),
+      ]);
+      if (!quality.length) return Response.json({status:"NO_QUALITY_DATA",
+        date},{status:409});
+      const claimed=await db(claimPath,"POST",
+        {report_date:date,destination,status:"SENDING"},
+        "resolution=ignore-duplicates,return=representation");
+      if (!Array.isArray(claimed)||!claimed.length)
+        return Response.json({status:"COMPACT_TEST_ALREADY_ATTEMPTED",date});
+      try {
+        // Use the exact same card formatter as the production daily report.
+        const payload=card(date,receiving,quality,undefined,signal);
+        payload.attachments[0].content.body.unshift({
+          type:"TextBlock",
+          text:"ทดสอบการ์ดรูปแบบใหม่ 1 ครั้ง | ข้อมูลจริงวันที่ 15 พ.ย. 2569",
+          weight:"Bolder",wrap:true,
+        });
+        const response=await fetch(env("TEAMS_WEBHOOK_URL"),{
+          method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify(payload),
+        });
+        if (!response.ok) throw new Error("TEAMS_COMPACT_TEST_HTTP_"+response.status);
+        await db(updatePath,"PATCH",
+          {status:"SENT",updated_at:new Date().toISOString(),error_code:null});
+        return Response.json({status:"COMPACT_TEST_ACCEPTED_BY_TEAMS_WORKFLOW",
+          date,destination,receiving_count:receiving.length,
+          quality_count:quality.length,
+          unspecified_branch_count:quality.filter(q=>!q.branch?.trim()||
+            q.branch.trim()==="ไม่ระบุสาขา").length,
+          webhook_http_status:response.status});
+      } catch (error) {
+        const code=error instanceof Error ? error.message.slice(0,70) : "UNKNOWN";
+        await db(updatePath,"PATCH",{status:"FAILED",
+          updated_at:new Date().toISOString(),error_code:code}).catch(()=>{});
+        return Response.json({status:"COMPACT_TEST_FAILED",date,error_code:code},
+          {status:502});
+      }
+    } catch (_) {
+      console.error("Compact report single test failed before dispatch");
+      return Response.json({status:"COMPACT_TEST_PREP_FAILED",date},
+        {status:500});
+    }
+  }
+
   if (requestBody?.test_send_once === true) {
     const yesterday=bangkokYesterday();
     const testDate=new Date(Date.parse(yesterday.date+"T00:00:00Z")+86400000)
