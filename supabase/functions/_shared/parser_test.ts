@@ -144,3 +144,11 @@ Deno.test("do not turn a bare ยอดสั่ง label into a fake product na
   if (r.items.some(x=>x.product==="ยอด" || x.product==="ยอดสั่ง"))
     throw Error(JSON.stringify(r));
 });
+
+Deno.test("wrapped order and received labels retain the actual product name", () => {
+  const raw="สาขา พระราม 2 ขออนุญาตแจ้งปัญหา\n"+
+    "เนื้อสันคอ\nยอดสั่ง 50 กก\nรับจริง 53.2 กก";
+  const r=parseReceivingMessage(raw,epoch);
+  if(r.items.length!==1||r.items[0].product!=="เนื้อสันคอ"||
+     r.items[0].delta_qty!==3.2)throw Error(JSON.stringify(r));
+});
