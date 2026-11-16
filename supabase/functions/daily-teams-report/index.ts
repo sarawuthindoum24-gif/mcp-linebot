@@ -160,11 +160,25 @@ function card(date:string, issues:Issue[], quality:QualityIssue[], downloadUrl?:
     text:"Receiving: "+signal.reviewCount+
       " ข้อความต้องตรวจทานก่อนสรุปรายการและจำนวน โปรดดูคิวตรวจทานในฐานข้อมูล",
     wrap:true});
+  // Do not count the missing-branch bucket as an identified branch.
+  const missingBranchCount=qualityByBranch.get("ไม่ระบุสาขา")?.length||0;
+  const knownBranchCount=qualityByBranch.size-(missingBranchCount?1:0);
   blocks.push({type:"TextBlock",text:"Quality | กลุ่มต่างจังหวัด: "+quality.length+
-    " รายการ จาก "+qualityByBranch.size+" สาขา",weight:"Bolder",wrap:true,separator:true});
+    " รายการ จาก "+knownBranchCount+" สาขา"+
+    (missingBranchCount?" | ไม่ระบุสาขา "+missingBranchCount+" รายการ":""),
+    weight:"Bolder",wrap:true,separator:true});
   let qualityIncluded=0;
   for (const [branch,values] of [...qualityByBranch.entries()].sort((a,b)=>
-    a[0].localeCompare(b[0],"th"))) {
+    a[0]==="ไม่ระบุสาขา" ? -1 : b[0]==="ไม่ระบุสาขา" ? 1 :
+      a[0].localeCompare(b[0],"th"))) {
+    if (branch==="ไม่ระบุสาขา") {
+      // Keep individual records in Supabase/CSV; compact only the Teams card.
+      const text="ไม่ระบุสาขา: "+values.length+" รายการ (รอตรวจสอบชื่อสาขา)";
+      if (JSON.stringify(blocks).length+text.length > 22000) break;
+      blocks.push({type:"TextBlock",text,wrap:true,separator:true});
+      qualityIncluded++;
+      continue;
+    }
     const details=values.map(v=>(v.product?.trim()||"ไม่ระบุสินค้า")+
       " | จำนวน "+(v.quantity_text?.trim()||"ไม่ระบุ")+
       (v.weight_text?.trim()?" | น้ำหนัก "+v.weight_text.trim():"")+
