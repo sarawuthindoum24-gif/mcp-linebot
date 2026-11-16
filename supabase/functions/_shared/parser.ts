@@ -157,7 +157,9 @@ export function parseReceivingMessage(raw: string, sentMs: number): ParsedMessag
       return;
     }
     const m = combined.match(pair);
-    if (!m || !branch) { unparsed_lines++; return; }
+    if (!m || !branch || /^(?:ยอด|ยอดสั่ง)$/u.test(m?.[1]?.trim()||"")) {
+      unparsed_lines++;return;
+    }
 
     const otherUnit = combined.slice(m[0].length).match(statedUnit)?.[2];
     const explicitOrderedUnit = m[3];
@@ -201,6 +203,7 @@ export function parseReceivingMessage(raw: string, sentMs: number): ParsedMessag
     const m = line.match(marker);
     const next = lines[i+1]?.trim() || "";
     const unbulletedProduct = Boolean(line && !/^สาขา/u.test(line) &&
+      !/^(?:ยอดสั่ง|สั่ง)\s*\d/u.test(line) &&
       (/^(?:ยอดสั่ง|สั่ง)/u.test(next) ||
        (/(?:ยอดสั่ง|สั่ง)/u.test(line) &&
         /(?:รับจริง|ได้รับจริง|ไม่ได้รับ)/u.test(line))));
