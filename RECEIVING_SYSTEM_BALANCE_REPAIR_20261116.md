@@ -25,3 +25,10 @@
 - Google Sheets `ISSUES`/`BRANCH_DAILY` use the existing 15-minute Apps Script sync against the Supabase export endpoint. Don't reinstall a trigger.
 - The Teams report scheduled at 08:00 Bangkok groups incidents by **message receipt date**. A previously SENT date remains SENT; historical backfill does **not** automatically resend it.
 - Keep `line_message_id + line_item_index` unique and reconcile old records before any broad replays. Do not execute a second historical backfill without verifying the prior inserts.
+
+## Google Sheets sync fix (same day)
+
+- The current live Apps Script, pulled using authenticated `clasp`, already supported reported-only receiving rows, but still rejected +/-3kg tolerance rows. This could abort the entire mirror update.
+- Patched live script to apply zero shortage / 3% overage rules, skip the one historical policy-accepted overage with a warning rather than fail the whole sync, and keep reported-only NOT_RECEIVED / INCOMPLETE_RECEIPT rows.
+- `ISSUES`, `BRANCH_DAILY`, and `GROUP_DAILY` must count only reportable rows consistently; source records remain in Supabase and can be audited.
+- Added pure policy regression tests (4 passed) in `apps-script/receiving-policy.test.mjs` and CI. Pushed through `clasp` and pulled again to confirm exact live source match; reused existing 15-minute trigger. Manual `clasp run` requires execution API support and returned `NOT_FOUND`; scheduled trigger remains the live sync mechanism.
