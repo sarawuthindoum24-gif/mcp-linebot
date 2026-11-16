@@ -208,6 +208,7 @@ export function parseReceivingMessage(raw: string, sentMs: number): ParsedMessag
        (/(?:ยอดสั่ง|สั่ง)/u.test(line) &&
         /(?:รับจริง|ได้รับจริง|ไม่ได้รับ)/u.test(line))));
     const systemBalanceProduct=Boolean(line && !/^สาขา/u.test(line) &&
+      !/^(?:ยอดสั่ง|สั่ง)\s*\d/u.test(line) &&
       reportedItem.test(line) && /(?:ได้รับจริง|รับจริง)/u.test(next));
     if (m || unbulletedProduct || systemBalanceProduct) {
       flush();
