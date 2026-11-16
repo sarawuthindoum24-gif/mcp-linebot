@@ -49,6 +49,12 @@ function receivingNumber_(value) {
   return n;
 }
 
+/** True only for an overage within the permitted inclusive 3% boundary. */
+function receivingOverageWithinTolerance_(delta, ordered) {
+  if (delta == null || ordered == null || delta <= 0 || ordered <= 0) return false;
+  return Math.round(delta * 1000) * 100 <= Math.round(ordered * 1000) * 3;
+}
+
 function receivingWrite_(spreadsheet, tab, headers, rows) {
   const sheet = spreadsheet.getSheetByName(tab);
   if (!sheet) throw new Error('Missing sheet ' + tab);
@@ -86,6 +92,8 @@ function syncReceivingIssues() {
     const issueRows = [];
     const daily = new Map();
     const seen = new Set();
+    const reportableIssues = [];
+    let skippedLegacyTolerance = 0;
     for (const issue of issues) {
       if (seen.has(issue.id)) throw new Error('Duplicate issue ID in export');
       seen.add(issue.id);
@@ -107,11 +115,16 @@ function syncReceivingIssues() {
         if (notReceived && (ordered <= 0 || received !== 0 || delta >= 0))
           throw new Error('Invalid not-received quantity in export');
       }
-      // Weighted goods must exceed +/- 3 kg; count units report any nonzero difference.
-      // Explicit non-receipt is reportable at every quantity.
-      if (delta === 0 || (delta !== null && !notReceived && issue.unit === 'kg' &&
-          Math.abs(Math.round(delta * 1000)) <= 3000))
-        throw new Error('Accepted variance unexpectedly included in receiving issues export');
+      // Any shortage is reportable; overages of up to 3% are acceptable.
+      // Legacy entries under the obsolete +/-3kg rule remain in Supabase for audit,
+      // but are excluded from the current receiving mirror rather than halting sync.
+      if (delta === 0) throw new Error('Zero-variance row unexpectedly exported');
+      if (receivingOverageWithinTolerance_(delta, ordered)) {
+        skippedLegacyTolerance++;
+        console.warn('Historical overage within 3% omitted from report: ' + issue.id);
+        continue;
+      }
+      reportableIssues.push(issue);
       const date = receivingDate_(issue.message_at);
       const branch = String(issue.branch);
       issueRows.push([
@@ -123,7 +136,7 @@ function syncReceivingIssues() {
         issue.variance_type, incomplete ? 'ได้รับไม่ครบ' :
           notReceived ? 'ไม่ได้รับสินค้า' : delta < 0 ?
           (issue.unit === 'kg' ? 'น้ำหนักชั่งขาด' : 'รับขาด') :
-          (issue.unit === 'kg' ? 'น้ำหนักชั่งเกิน' : 'รับเกิน'),
+          'รับเกินเกณฑ์ 3%',
         issue.status, 'LINE OA @842nltit', receivingText_(issue.line_message_id),
         receivingText_(issue.group_id||''), receivingText_(
           (delta === null ? 'จำนวนที่สาขาแจ้งขาด ' + reported + ' ' + issue.unit +
@@ -210,7 +223,7 @@ function syncReceivingIssues() {
       });
       return dailyByGroup.get(key);
     }
-    for (const issue of issues) groupDaily_(receivingDate_(issue.message_at),issue.group_id).receiving++;
+    for (const issue of reportableIssues) groupDaily_(receivingDate_(issue.message_at),issue.group_id).receiving++;
     for (const q of quality) groupDaily_(receivingDate_(q.message_at),q.group_id).quality++;
     for (const m of qualityMedia) groupDaily_(receivingDate_(m.message_at),m.group_id).media++;
     const groupDailyRows = [...dailyByGroup.values()]
@@ -231,9 +244,11 @@ function syncReceivingIssues() {
        'media_messages','status'], groupDailyRows);
 
     SpreadsheetApp.flush();
-    console.log('LINE group mirror synced: issues='+issues.length+', quality='+quality.length+
+    console.log('LINE group mirror synced: issues='+reportableIssues.length+
+      ', tolerated_legacy_excluded='+skippedLegacyTolerance+', quality='+quality.length+
       ', media='+qualityMedia.length+', groups='+groups.length+', reports='+dispatches.length);
-    return {issues:issues.length,branchDays:dailyRows.length,quality:quality.length,
+    return {issues:reportableIssues.length,skippedLegacyTolerance,
+      branchDays:dailyRows.length,quality:quality.length,
       media:qualityMedia.length,groups:groups.length,dispatches:dispatches.length};
   } finally {
     lock.releaseLock();
