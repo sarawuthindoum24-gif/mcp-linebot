@@ -4,17 +4,25 @@ export interface ParsedItem {
   branch: string;
   product: string;
   issue_date: string;
-  ordered_qty: number;
-  received_qty: number;
-  delta_qty: number;
+  ordered_qty: number | null;
+  received_qty: number | null;
+  delta_qty: number | null;
+  reported_missing_qty: number | null;
+  reported_action: string | null;
   unit: string;
-  variance_type: "SHORT" | "OVER";
+  variance_type: "SHORT" | "OVER" | "NOT_RECEIVED" | "INCOMPLETE_RECEIPT";
 }
 export interface ParsedMessage {
   branch: string | null;
   issue_date: string;
   items: ParsedItem[];
   unparsed_lines: number;
+}
+
+/** A candidate with no confidently parsed rows must be reviewed, never counted as zero issues. */
+export function isReceivingIssueCandidate(raw: string): boolean {
+  return /(?:ไม่ได้รับ(?:สินค้า)?|ได้รับ(?:สินค้า)?ไม่ครบ|รับสินค้า\s*ไม่ครบ|รับขาด|รับเกิน|ขาด\s*\/\s*เกิน|ยอดขาด|ชั่งขาด|ชั่งเกิน)/u.test(raw) ||
+    /(?:ได้รับจริง|รับจริง)[\s\S]{0,160}(?:ในระบบ|ยอดในระบบ)/u.test(raw);
 }
 
 function digits(s: string): string {
@@ -31,7 +39,7 @@ function dateInBangkok(ms: number): string {
   return find("year") + "-" + find("month") + "-" + find("day");
 }
 function messageDate(s: string, fallbackMs: number): string {
-  const m = digits(s).match(/วันที่\s*(\d{1,2})\s*[\/\-.]\s*(\d{1,2})\s*[\/\-.]\s*(\d{2,4})/);
+  const m = digits(s).match(/วันที่\s*(?:แจ้ง|รับสินค้า|เกิดเหตุ)?\s*(\d{1,2})\s*[\/\-.]\s*(\d{1,2})\s*[\/\-.]\s*(\d{2,4})/);
   if (!m) return dateInBangkok(fallbackMs);
   let year = Number(m[3]);
   if (year < 100) year += 2500;
@@ -65,12 +73,21 @@ export function parseReceivingMessage(raw: string, sentMs: number): ParsedMessag
   const quantityRe = "([0-9][0-9,]*(?:\\.[0-9]+)?)";
   const pair = new RegExp(
     "^(.+?)\\s*(?:ยอดสั่ง|สั่ง)\\s*" + quantityRe + "\\s*" + unitRe + "?" +
-    "\\s*(?:(?:ได้รับจริง|ได้รับ|รับจริง|รับ)\\s*" + quantityRe + "\\s*" + unitRe + "?|ไม่ได้รับสินค้า)",
+    "\\s*(?:(?:ได้รับจริง|ได้รับ|รับจริง|รับ)\\s*" + quantityRe + "\\s*" + unitRe + "?|ไม่ได้รับ(?:สินค้า|เลย)?)",
     "i",
   );
   // The "short 6 กก." suffix can provide a missing unit, never a missing quantity.
   const statedUnit = new RegExp("(?:ส่วนต่าง|รับขาด|ขาด|เกิน)\\s*" + quantityRe + "\\s*" + unitRe, "i");
+  const reportedItem = new RegExp("^(.+?)\\s+(?:จำนวน\\s*)?" + quantityRe +
+    "\\s*" + unitRe + "(?:\\s|$)", "i");
+  // The branch can report actual receipt vs in-system transfer balance,
+  // without spelling out an order quantity. Keep the source distinction.
+  const systemBalance = new RegExp(
+    "(?:ได้รับจริง|รับจริง)\\s*" + quantityRe + "\\s*" + unitRe +
+    "\\s*(?:ในระบบ|ยอดในระบบ|ระบบโอน(?:เข้ามา)?)\\s*" + quantityRe + "\\s*" + unitRe, "i",
+  );
   const marker = /^\s*(?:[-•*]\s*|[0-9]{1,3}[.)](?![0-9])\s*)(.+)$/;
+  const reported_action = text.match(/ขออนุญาตโอนคืนสินค้า|ขออนุญาตโอนคืน|โอนคืนเรียบร้อย/u)?.[0] || null;
 
   let current: {index: number; lines: string[]} | null = null;
   const flush = () => {
@@ -78,9 +95,71 @@ export function parseReceivingMessage(raw: string, sentMs: number): ParsedMessag
     const combined = current.lines.join(" ").replace(/\s+/g, " ").trim();
     const index = current.index;
     current = null;
-    if (!/(?:ยอดสั่ง|สั่ง)/.test(combined)) return;
+    if (!/(?:ยอดสั่ง|สั่ง)/.test(combined)) {
+      const systemPair=combined.match(systemBalance);
+      if (systemPair) {
+        const named=combined.match(reportedItem);
+        const statedUnit=named ? normalizeUnit(named[3]) : null;
+        const receivedUnit=normalizeUnit(systemPair[2]);
+        const referenceUnit=normalizeUnit(systemPair[4]);
+        const sameUnits=Boolean(statedUnit && receivedUnit && referenceUnit &&
+          statedUnit.kind===receivedUnit.kind &&
+          receivedUnit.kind===referenceUnit.kind &&
+          (receivedUnit.kind==="weight" ||
+           (statedUnit.unit===receivedUnit.unit && receivedUnit.unit===referenceUnit.unit)));
+        if (!branch || !named?.[1]?.trim() || !sameUnits ||
+            !statedUnit || !receivedUnit || !referenceUnit) {
+          unparsed_lines++;return;
+        }
+        const ordered=Math.round(number(systemPair[3])*referenceUnit.factor*1000)/1000;
+        const received=Math.round(number(systemPair[1])*receivedUnit.factor*1000)/1000;
+        const difference=Math.round((received-ordered)*1000)/1000;
+        const statedGap=Math.round(number(named[2])*statedUnit.factor*1000)/1000;
+        if (!Number.isFinite(ordered)||!Number.isFinite(received)||
+            ordered<0||received<0||!Number.isFinite(statedGap)||
+            // Do not silently accept contradictory numeric evidence.
+            Math.abs(Math.abs(difference)-statedGap)>0.011) {
+          unparsed_lines++;return;
+        }
+        if (difference===0) return;
+        if (difference>0 && ordered>0 &&
+            Math.round(difference*1000)*100<=Math.round(ordered*1000)*3) return;
+        const sourceNote=reported_action ?
+          reported_action+" | เทียบกับยอดในระบบ" : "เทียบกับยอดในระบบ";
+        result.push({index,branch,product:named[1].trim(),issue_date,
+          ordered_qty:ordered,received_qty:received,delta_qty:difference,
+          reported_missing_qty:null,reported_action:sourceNote,
+          unit:receivedUnit.unit,
+          variance_type:ordered>0 && received===0?"NOT_RECEIVED":
+            difference<0?"SHORT":"OVER"});
+        return;
+      }
+      const hasNotReceived=/(?:ไม่ได้รับ(?:สินค้า)?)/u.test(combined);
+      const hasIncomplete=/(?:ได้รับ(?:สินค้า)?ไม่ครบ|รับสินค้าไม่ครบ)/u.test(combined);
+      const globalNotReceived=/(?:ไม่ได้รับ(?:สินค้า)?)/u.test(text);
+      const globalIncomplete=/(?:ได้รับ(?:สินค้า)?ไม่ครบ|รับสินค้าไม่ครบ)/u.test(text);
+      const issueType=hasNotReceived && !hasIncomplete ? "NOT_RECEIVED" :
+        hasIncomplete && !hasNotReceived ? "INCOMPLETE_RECEIPT" :
+        !hasNotReceived && !hasIncomplete && globalNotReceived !== globalIncomplete ?
+          (globalNotReceived ? "NOT_RECEIVED" : "INCOMPLETE_RECEIPT") : null;
+      if (!issueType) return;
+      const m=combined.match(reportedItem);
+      const unit=m ? normalizeUnit(m[3]) : null;
+      const amount=m && unit ? Math.round(number(m[2])*unit.factor*1000)/1000 : NaN;
+      if (!branch || !m?.[1]?.trim() || !unit || !Number.isFinite(amount) || amount<=0) {
+        unparsed_lines++;
+        return;
+      }
+      result.push({index,branch,product:m[1].trim(),issue_date,
+        ordered_qty:null,received_qty:issueType==="NOT_RECEIVED"?0:null,
+        delta_qty:null,reported_missing_qty:amount,reported_action,
+        unit:unit.unit,variance_type:issueType});
+      return;
+    }
     const m = combined.match(pair);
-    if (!m || !branch) { unparsed_lines++; return; }
+    if (!m || !branch || /^(?:ยอด|ยอดสั่ง)$/u.test(m?.[1]?.trim()||"")) {
+      unparsed_lines++;return;
+    }
 
     const otherUnit = combined.slice(m[0].length).match(statedUnit)?.[2];
     const explicitOrderedUnit = m[3];
@@ -105,27 +184,35 @@ export function parseReceivingMessage(raw: string, sentMs: number): ParsedMessag
       return;
     }
     if (difference === 0) return;
-    // No shortages are tolerated. An overage of exactly 3% is acceptable.
-    // Quantities have already been normalized to 3 decimal places (kg or count).
-    // Compare scaled integers so exact-boundary cases are deterministic.
+    // Business rule: any shortage is an incident; overage up to 3% of reference is allowed.
+    // Apply consistently to weighed and counted items (not the obsolete +/-3kg rule).
+    const notReceived = ordered > 0 && received === 0;
     if (difference > 0 && ordered > 0 &&
-        Math.round(difference * 1000) * 100 <= Math.round(ordered * 1000) * 3) return;
-    // Ordered zero and received > zero is always an overage issue.
+        Math.round(difference*1000)*100<=Math.round(ordered*1000)*3) return;
 
     result.push({
       index, branch, product: m[1].trim().replace(/[:：-]\s*$/, ""),
       issue_date, ordered_qty: ordered, received_qty: received,
-      delta_qty: difference, unit: a.unit,
-      variance_type: difference < 0 ? "SHORT" : "OVER",
+      delta_qty: difference, reported_missing_qty:null,reported_action,unit: a.unit,
+      variance_type: notReceived ? "NOT_RECEIVED" : difference < 0 ? "SHORT" : "OVER",
     });
   };
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
     const m = line.match(marker);
-    if (m) {
+    const next = lines[i+1]?.trim() || "";
+    const unbulletedProduct = Boolean(line && !/^สาขา/u.test(line) &&
+      !/^(?:ยอดสั่ง|สั่ง)\s*\d/u.test(line) &&
+      (/^(?:ยอดสั่ง|สั่ง)/u.test(next) ||
+       (/(?:ยอดสั่ง|สั่ง)/u.test(line) &&
+        /(?:รับจริง|ได้รับจริง|ไม่ได้รับ)/u.test(line))));
+    const systemBalanceProduct=Boolean(line && !/^สาขา/u.test(line) &&
+      !/^(?:ยอดสั่ง|สั่ง)\s*\d/u.test(line) &&
+      reportedItem.test(line) && /(?:ได้รับจริง|รับจริง)/u.test(next));
+    if (m || unbulletedProduct || systemBalanceProduct) {
       flush();
-      current = {index: i + 1, lines: [m[1]]};
+      current = {index: i + 1, lines: [m ? m[1] : line]};
     } else if (current && line) {
       current.lines.push(line);
     }

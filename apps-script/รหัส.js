@@ -49,6 +49,12 @@ function receivingNumber_(value) {
   return n;
 }
 
+/** True only for an overage within the permitted inclusive 3% boundary. */
+function receivingOverageWithinTolerance_(delta, ordered) {
+  if (delta == null || ordered == null || delta <= 0 || ordered <= 0) return false;
+  return Math.round(delta * 1000) * 100 <= Math.round(ordered * 1000) * 3;
+}
+
 function receivingWrite_(spreadsheet, tab, headers, rows) {
   const sheet = spreadsheet.getSheetByName(tab);
   if (!sheet) throw new Error('Missing sheet ' + tab);
@@ -86,43 +92,72 @@ function syncReceivingIssues() {
     const issueRows = [];
     const daily = new Map();
     const seen = new Set();
+    const reportableIssues = [];
+    let skippedLegacyTolerance = 0;
     for (const issue of issues) {
       if (seen.has(issue.id)) throw new Error('Duplicate issue ID in export');
       seen.add(issue.id);
-      const delta = receivingNumber_(issue.delta_qty);
-      const ordered = receivingNumber_(issue.ordered_qty);
-      const received = receivingNumber_(issue.received_qty);
-      if (Math.abs((received - ordered) - delta) > 0.001)
-        throw new Error('Quantity mismatch in export');
-      // Zero shortages permitted; overages up to and including 3% are accepted.
-      // All exported receiving_issues must therefore exceed the allowed tolerance.
-      if (delta === 0 || (delta > 0 && ordered > 0 &&
-          Math.round(delta * 1000) * 100 <= Math.round(ordered * 1000) * 3))
-        throw new Error('Accepted variance unexpectedly included in receiving issues export');
+      const delta = issue.delta_qty == null ? null : receivingNumber_(issue.delta_qty);
+      const ordered = issue.ordered_qty == null ? null : receivingNumber_(issue.ordered_qty);
+      const received = issue.received_qty == null ? null : receivingNumber_(issue.received_qty);
+      const reported = issue.reported_missing_qty == null ? null :
+        receivingNumber_(issue.reported_missing_qty);
+      const notReceived = issue.variance_type === 'NOT_RECEIVED';
+      const incomplete = issue.variance_type === 'INCOMPLETE_RECEIPT';
+      if (delta === null) {
+        if (reported === null || reported <= 0 || ordered !== null ||
+            (incomplete ? received !== null : !notReceived || received !== 0))
+          throw new Error('Invalid reported-only quantity in export');
+      } else {
+        if (ordered === null || received === null ||
+            Math.abs((received - ordered) - delta) > 0.001)
+          throw new Error('Quantity mismatch in export');
+        if (notReceived && (ordered <= 0 || received !== 0 || delta >= 0))
+          throw new Error('Invalid not-received quantity in export');
+      }
+      // Any shortage is reportable; overages of up to 3% are acceptable.
+      // Legacy entries under the obsolete +/-3kg rule remain in Supabase for audit,
+      // but are excluded from the current receiving mirror rather than halting sync.
+      if (delta === 0) throw new Error('Zero-variance row unexpectedly exported');
+      if (receivingOverageWithinTolerance_(delta, ordered)) {
+        skippedLegacyTolerance++;
+        console.warn('Historical overage within 3% omitted from report: ' + issue.id);
+        continue;
+      }
+      reportableIssues.push(issue);
       const date = receivingDate_(issue.message_at);
       const branch = String(issue.branch);
       issueRows.push([
         issue.id, issue.issue_date, receivingTimestamp_(issue.message_at),
         receivingText_(branch), receivingText_(issue.product),
         issue.unit === 'kg' ? 'สินค้าชั่ง' : 'สินค้านับ',
-        ordered, received, delta, Math.abs(delta), issue.unit,
-        issue.variance_type, delta < 0 ?
-          (issue.unit === 'kg' ? 'น้ำหนักชั่งขาด' : 'รับขาด') : 'รับเกินเกณฑ์ 3%',
-        issue.status, 'LINE OA @842nltit', receivingText_(issue.line_message_id), receivingText_(issue.group_id||''), '',
+        ordered ?? '', received ?? '', delta ?? '',
+        delta === null ? reported : Math.abs(delta), issue.unit,
+        issue.variance_type, incomplete ? 'ได้รับไม่ครบ' :
+          notReceived ? 'ไม่ได้รับสินค้า' : delta < 0 ?
+          (issue.unit === 'kg' ? 'น้ำหนักชั่งขาด' : 'รับขาด') :
+          'รับเกินเกณฑ์ 3%',
+        issue.status, 'LINE OA @842nltit', receivingText_(issue.line_message_id),
+        receivingText_(issue.group_id||''), receivingText_(
+          (delta === null ? 'จำนวนที่สาขาแจ้งขาด ' + reported + ' ' + issue.unit +
+            '; ยอดสั่ง/รับไม่ระบุ' : '') +
+          (issue.reported_action ? '; การดำเนินการ: ' + issue.reported_action : '')),
       ]);
       const key = date + '\u0000' + branch;
       if (!daily.has(key)) daily.set(key, {
-        date, branch, count: 0, short: 0, over: 0,
+        date, branch, count: 0, short: 0, over: 0, notReceived: 0, incomplete: 0,
         shortKg: 0, overKg: 0, other: 0, weightShortCount: 0,
         pending: 0, products: [],
       });
       const group = daily.get(key);
       group.count++;
-      if (delta < 0) group.short++; else group.over++;
-      if (issue.unit === 'kg') {
+      if (issue.variance_type === 'OVER') group.over++; else group.short++;
+      if (notReceived) group.notReceived++;
+      if (incomplete) group.incomplete++;
+      if (issue.unit === 'kg' && delta !== null) {
         if (delta < 0) {
           group.shortKg += Math.abs(delta);
-          group.weightShortCount++;
+          if (!notReceived) group.weightShortCount++;
         }
         else group.overKg += delta;
       } else group.other++;
@@ -134,6 +169,8 @@ function syncReceivingIssues() {
       .map(g => [g.date, receivingText_(g.branch), g.count, g.short, g.over,
         g.shortKg, g.overKg, g.other, g.pending,
         (g.weightShortCount ? 'น้ำหนักชั่งขาด ' + g.weightShortCount + ' รายการ | ' : '') +
+          (g.notReceived ? 'ไม่ได้รับสินค้า ' + g.notReceived + ' รายการ | ' : '') +
+          (g.incomplete ? 'ได้รับไม่ครบ ' + g.incomplete + ' รายการ | ' : '') +
           g.products.join(', '),
         'รอตรวจสอบ', 'ตรวจใบส่งของและหลักฐานรับสินค้า',
         dispatchByDate.get(g.date) || 'ยังไม่ส่ง']);
@@ -157,7 +194,7 @@ function syncReceivingIssues() {
     receivingWrite_(spreadsheet, 'REPORT_LOG', [
       'report_date','scope','destination','sent_at','status','idempotency_key','error_note',
     ], reportRows);
-    // Quality reporting is independent of receiving's zero-shortage/3%-overage policy.
+    // Quality reporting is independent of receiving's 3 kg weighted tolerance.
     const groupRows = groups.map(g => [
       receivingText_(g.group_id), receivingText_(g.group_name||''),
       g.route, g.route_source, receivingTimestamp_(g.last_seen_at),
@@ -186,7 +223,7 @@ function syncReceivingIssues() {
       });
       return dailyByGroup.get(key);
     }
-    for (const issue of issues) groupDaily_(receivingDate_(issue.message_at),issue.group_id).receiving++;
+    for (const issue of reportableIssues) groupDaily_(receivingDate_(issue.message_at),issue.group_id).receiving++;
     for (const q of quality) groupDaily_(receivingDate_(q.message_at),q.group_id).quality++;
     for (const m of qualityMedia) groupDaily_(receivingDate_(m.message_at),m.group_id).media++;
     const groupDailyRows = [...dailyByGroup.values()]
@@ -207,9 +244,11 @@ function syncReceivingIssues() {
        'media_messages','status'], groupDailyRows);
 
     SpreadsheetApp.flush();
-    console.log('LINE group mirror synced: issues='+issues.length+', quality='+quality.length+
+    console.log('LINE group mirror synced: issues='+reportableIssues.length+
+      ', tolerated_legacy_excluded='+skippedLegacyTolerance+', quality='+quality.length+
       ', media='+qualityMedia.length+', groups='+groups.length+', reports='+dispatches.length);
-    return {issues:issues.length,branchDays:dailyRows.length,quality:quality.length,
+    return {issues:reportableIssues.length,skippedLegacyTolerance,
+      branchDays:dailyRows.length,quality:quality.length,
       media:qualityMedia.length,groups:groups.length,dispatches:dispatches.length};
   } finally {
     lock.releaseLock();

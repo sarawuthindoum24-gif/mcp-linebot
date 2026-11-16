@@ -97,3 +97,58 @@ Deno.test("fractional overage below threshold is accepted, above threshold repor
       r.items[0].delta_qty !== 3.001 || r.items[1].delta_qty !== -0.001)
     throw Error(JSON.stringify(r));
 });
+
+Deno.test("system balance vs actual receipt is a weighed shortage (bullet message)", () => {
+  const raw = [
+    "สาขาเดอะสตรีทรัชดา",
+    "ขออนุญาตโอนคืน",
+    "- เนื้อวัวออสเตรเลีย 3.3 กก.",
+    "เนื่องจากได้รับจริง128.4กก.",
+    "ในระบบ131.7กก.",
+    "ขอบคุณค่ะ",
+  ].join("\n");
+  const r=parseReceivingMessage(raw,Date.parse("2026-11-14T23:09:19Z"));
+  if (r.branch!=="เดอะสตรีทรัชดา" || r.items.length!==1 ||
+      r.items[0].product!=="เนื้อวัวออสเตรเลีย" ||
+      r.items[0].ordered_qty!==131.7 || r.items[0].received_qty!==128.4 ||
+      r.items[0].delta_qty!==-3.3 || r.items[0].variance_type!=="SHORT" ||
+      r.items[0].unit!=="kg" || r.unparsed_lines!==0)
+    throw new Error(JSON.stringify(r));
+});
+
+Deno.test("system balance vs actual receipt supports unbulleted follow-up", () => {
+  const raw = [
+    "สาขาเดอะสตรีทรัชดา",
+    "ขออนุญาตโอนคืน",
+    "เนื้อวัวออสเตรเลีย 3.6 กก.",
+    "เนื่องจากได้รับจริง 118.2 กก.",
+    "ในระบบ 121.8 กก.",
+  ].join("\n");
+  const r=parseReceivingMessage(raw,Date.parse("2026-11-15T19:10:00Z"));
+  if (r.items.length!==1 || r.items[0].delta_qty!==-3.6 ||
+      r.items[0].ordered_qty!==121.8 || r.items[0].received_qty!==118.2)
+    throw new Error(JSON.stringify(r));
+});
+
+Deno.test("system vs actual amount must both be known; avoid inferred incident", () => {
+  const r=parseReceivingMessage(
+    "สาขาเดอะสตรีทรัชดา\nขออนุญาตโอนคืน\n- เนื้อวัวออสเตรเลีย 3.3 กก.\nในระบบ131.7กก.",
+    epoch);
+  if(r.items.length!==0) throw new Error(JSON.stringify(r));
+});
+
+Deno.test("do not turn a bare ยอดสั่ง label into a fake product named ยอด", () => {
+  const r=parseReceivingMessage(
+    "สาขา พระราม 2 ขออนุญาตแจ้งปัญหา\nยอดสั่ง 70 กก. รับจริง 72.5 กก.",
+    epoch);
+  if (r.items.some(x=>x.product==="ยอด" || x.product==="ยอดสั่ง"))
+    throw Error(JSON.stringify(r));
+});
+
+Deno.test("wrapped order and received labels retain the actual product name", () => {
+  const raw="สาขา พระราม 2 ขออนุญาตแจ้งปัญหา\n"+
+    "เนื้อสันคอ\nยอดสั่ง 50 กก\nรับจริง 53.2 กก";
+  const r=parseReceivingMessage(raw,epoch);
+  if(r.items.length!==1||r.items[0].product!=="เนื้อสันคอ"||
+     r.items[0].delta_qty!==3.2)throw Error(JSON.stringify(r));
+});
